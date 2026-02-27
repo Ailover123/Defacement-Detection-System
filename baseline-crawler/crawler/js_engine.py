@@ -1,10 +1,11 @@
 """
 FILE DESCRIPTION: Dedicated hub for all headless browser operations and JS rendering logic.
-STABLE PRODUCTION VERSION:
+PRODUCTION STABLE VERSION:
 - 5 persistent workers
-- Self-healing browser recovery
-- Stable WordPress DOM capture
-- High speed with safe reuse
+- Fast navigation (commit-based)
+- WordPress-safe DOM stabilization
+- Self-healing crash recovery
+- High performance + no cascade failures
 """
 
 import threading
@@ -111,7 +112,7 @@ class RenderCache:
 
 
 # ============================================================
-# BROWSER MANAGER (FINAL STABLE VERSION)
+# BROWSER MANAGER
 # ============================================================
 
 class RenderResult:
@@ -163,7 +164,7 @@ class BrowserManager:
                             viewport={"width": 1280, "height": 900},
                         )
 
-                        # Block heavy resources (keep JS)
+                        # Block heavy resources but allow JS
                         def route_handler(route):
                             if route.request.resource_type in (
                                 "image", "font", "media"
@@ -187,16 +188,29 @@ class BrowserManager:
                             try:
                                 status_code = 0
 
-                                response = page.goto(
-                                    url,
-                                    wait_until="domcontentloaded",
-                                    timeout=20000,
-                                )
+                                # 🔥 FAST navigation (no DOM stall risk)
+                                try:
+                                    response = page.goto(
+                                        url,
+                                        wait_until="commit",
+                                        timeout=15000,
+                                    )
+                                    if response:
+                                        status_code = response.status
+                                except Exception as e:
+                                    logger.warning(
+                                        f"[JS-ENGINE] Fast commit failed for {url}: {e}"
+                                    )
 
-                                if response:
-                                    status_code = response.status
+                                # 🔥 Attempt stabilization but never fail
+                                try:
+                                    page.wait_for_load_state(
+                                        "domcontentloaded",
+                                        timeout=5000
+                                    )
+                                except:
+                                    pass
 
-                                # WordPress stabilization
                                 try:
                                     page.wait_for_load_state(
                                         "networkidle",
@@ -217,7 +231,7 @@ class BrowserManager:
                                     )
                                 )
 
-                                # reset fast
+                                # Fast reset
                                 try:
                                     page.goto("about:blank", timeout=2000)
                                 except:
@@ -228,7 +242,7 @@ class BrowserManager:
                                     f"[JS-ENGINE] Worker-{self.wid} page error: {e}"
                                 )
 
-                                # recreate page safely
+                                # Recreate page safely
                                 try:
                                     page.close()
                                 except:
@@ -237,7 +251,7 @@ class BrowserManager:
                                 try:
                                     page = context.new_page()
                                 except Exception:
-                                    raise  # force full browser restart
+                                    raise
 
                                 result_q.put(RenderResult(error=e))
 
@@ -249,7 +263,7 @@ class BrowserManager:
                         f"[JS-ENGINE] Worker-{self.wid} crashed. Restarting... {fatal}"
                     )
                     time.sleep(2)
-                    continue  # restart browser loop
+                    continue
 
     # --------------------------------------------------------
     # Initialization
@@ -298,7 +312,7 @@ class BrowserManager:
 
 
 # ============================================================
-# JS RENDER WORKER (EXTERNAL THREAD API)
+# JS RENDER WORKER (External API)
 # ============================================================
 
 class JSRenderWorker(threading.Thread):
