@@ -35,8 +35,7 @@ class BaselineWorker:
                 temp_url = "https://" + temp_url
             self.enforce_www = urlparse(temp_url).netloc.lower().startswith("www.")
 
-        # Use MAX_WORKERS from config, but ensure we don't exceed reasonable limits
-        # relative to the DB pool size if running mainly in parallel.
+        # Use MAX_WORKERS from config. User requested 5 workers.
         self.max_workers = MAX_WORKERS
 
     # ------------------------------------------------------------
@@ -50,8 +49,9 @@ class BaselineWorker:
             fetch_url = LinkUtility.normalize_url(url, preference_url=self.seed_url)
             fetch_url = LinkUtility.force_www_url(fetch_url)
 
-            # Polite delay BEFORE fetch
-            time.sleep(CRAWL_DELAY)
+            # Polite delay BEFORE fetch (Only if CRAWL_DELAY > 0)
+            if CRAWL_DELAY > 0:
+                time.sleep(CRAWL_DELAY)
 
             # Pass siteid and save_to_tmp to maintain user snippet behavior
             result = PageFetcher.fetch_rendered(fetch_url, siteid=self.siteid, save_to_tmp=True)
