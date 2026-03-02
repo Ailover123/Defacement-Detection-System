@@ -123,17 +123,17 @@ class RenderResult:
         self.error = error
 
 
+# ============================================================
+# BROWSER MANAGER (FAST + STABLE + SAFE)
+# ============================================================
+
 class BrowserManager:
 
-    _num_workers = 5
+    _num_workers = 5   
     _workers = []
     _queues = []
     _init_lock = threading.Lock()
     _rr_index = 0
-
-    # --------------------------------------------------------
-    # Worker Thread
-    # --------------------------------------------------------
 
     class _Worker(threading.Thread):
 
@@ -144,9 +144,11 @@ class BrowserManager:
             self.start()
 
         def run(self):
+
             while True:
                 try:
                     with sync_playwright() as p:
+
                         browser = p.chromium.launch(
                             headless=True,
                             args=[
@@ -156,18 +158,22 @@ class BrowserManager:
                                 "--disable-extensions",
                                 "--disable-background-networking",
                                 "--disable-renderer-backgrounding",
+                                "--disable-blink-features=AutomationControlled",
                             ],
                         )
 
                         context = browser.new_context(
                             user_agent=USER_AGENT,
                             viewport={"width": 1280, "height": 900},
+                            java_script_enabled=True,
                         )
 
-                        # Block heavy resources but allow JS
+                        #  Block heavy resources INCLUDING CSS
                         def route_handler(route):
                             if route.request.resource_type in (
-                                "image", "font", "media"
+                                "image",
+                                "font",
+                                "media",
                             ):
                                 return route.abort()
                             return route.continue_()
@@ -188,40 +194,30 @@ class BrowserManager:
                             try:
                                 status_code = 0
 
-                                # 🔥 FAST navigation (no DOM stall risk)
+                                #  Faster navigation strategy
                                 try:
                                     response = page.goto(
                                         url,
-                                        wait_until="commit",
-                                        timeout=15000,
+                                        wait_until="domcontentloaded",
+                                        timeout=20000,
                                     )
+
                                     if response:
-                                        status_code = response.status
+                                        status_code = response.status  
+
+                                    try:
+                                        page.wait_for_load_state("load", timeout=5000)
+                                    except:
+                                        pass
+
+                                    page.wait_for_timeout(400)
+                                    html = page.content()
+
                                 except Exception as e:
                                     logger.warning(
-                                        f"[JS-ENGINE] Fast commit failed for {url}: {e}"
+                                        f"[JS-ENGINE] Navigation failed for {url}: {e}"
                                     )
-
-                                # 🔥 Attempt stabilization but never fail
-                                try:
-                                    page.wait_for_load_state(
-                                        "domcontentloaded",
-                                        timeout=5000
-                                    )
-                                except:
-                                    pass
-
-                                try:
-                                    page.wait_for_load_state(
-                                        "networkidle",
-                                        timeout=5000
-                                    )
-                                except:
-                                    pass
-
-                                page.wait_for_timeout(800)
-
-                                html = page.content()
+                                    html = ""
 
                                 result_q.put(
                                     RenderResult(
@@ -233,7 +229,7 @@ class BrowserManager:
 
                                 # Fast reset
                                 try:
-                                    page.goto("about:blank", timeout=2000)
+                                    page.goto("about:blank", timeout=1500)
                                 except:
                                     pass
 
@@ -242,7 +238,7 @@ class BrowserManager:
                                     f"[JS-ENGINE] Worker-{self.wid} page error: {e}"
                                 )
 
-                                # Recreate page safely
+                                # Soft page recovery
                                 try:
                                     page.close()
                                 except:
@@ -289,7 +285,7 @@ class BrowserManager:
                 cls._workers.append(worker)
 
     # --------------------------------------------------------
-    # Public Render API
+    # Public API
     # --------------------------------------------------------
 
     @classmethod
@@ -309,7 +305,6 @@ class BrowserManager:
             raise result.error
 
         return result.content, result.final_url, result.status_code
-
 
 # ============================================================
 # JS RENDER WORKER (External API)
