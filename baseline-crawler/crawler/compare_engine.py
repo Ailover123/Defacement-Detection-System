@@ -145,7 +145,10 @@ class CompareEngine:
                 })
                 break
 
-            # =====================================
+            print("BASELINE SIZE:", len(old_raw_html))
+            print("LIVE SIZE:", len(html))
+
+            # =======   ==============================
             # CALCULATE SCORE
             # =====================================
             
@@ -192,6 +195,8 @@ class CompareEngine:
                 score=score,
                 checked_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             )
+
+
 
             # =====================================
             # UPSERT OBSERVED STATE
