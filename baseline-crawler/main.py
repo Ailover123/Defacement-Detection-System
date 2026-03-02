@@ -935,6 +935,20 @@ def main():
                     logger.info(f"{sid:<10} | {u:<50} | {err}")
                 
                 logger.info("=" * 100 + "\n")
+
+                # 1. Group the failures by siteid
+                from collections import defaultdict
+                grouped_failures = defaultdict(list)
+                for f in BASELINE_FAILED_URLS:
+                    sid = f.get('siteid', 'UNKNOWN')
+                    grouped_failures[sid].append(f.get('url', ''))
+                # 2. Print each site's failures as a separate array/list
+                for sid, urls in grouped_failures.items():
+                    logger.info(f"SITE ID: {sid} | Total Failed: {len(urls)}")
+                    logger.info("-" * 40)
+                    for u in urls:
+                        logger.info(f"  - {u}")
+                    logger.info("-" * 100)
             
             logger.info(f"--- Session ended: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
             

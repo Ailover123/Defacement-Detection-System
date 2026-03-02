@@ -196,7 +196,16 @@ def fetch_enabled_sites():
     conn = get_connection()
     try:
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT siteid, custid, url FROM sites")
+        # 🛡️ Retrieve site metadata PLUS WAF Bypass IP (if exists)
+        cur.execute("""
+            SELECT 
+                s.siteid, 
+                s.custid, 
+                s.url,
+                w.https_ip as waf_ip
+            FROM sites s
+            LEFT JOIN waf_policy_data w ON s.siteid = w.siteid
+        """)
         return cur.fetchall()
     finally:
         cur.close()
