@@ -45,42 +45,36 @@ class BaselineWorker:
         thread_name = threading.current_thread().name
 
         try:
-            # Normalize + force www (network fetch only)
             fetch_url = LinkUtility.normalize_url(url, preference_url=self.seed_url)
             fetch_url = LinkUtility.force_www_url(fetch_url)
 
-            # Polite delay BEFORE fetch (Only if CRAWL_DELAY > 0)
             if CRAWL_DELAY > 0:
                 time.sleep(CRAWL_DELAY)
 
-            # Pass siteid and save_to_tmp to maintain user snippet behavior
-            result = PageFetcher.fetch_rendered(fetch_url, siteid=self.siteid, save_to_tmp=True)
-            if not result["success"]:
-                return "failed", f"Fetch failed for site={self.siteid} url={url}: {result.get('error')}", thread_name
+            # 🔥 ALWAYS use Playwright for baseline
+            html_content, final_url, status_code = BrowserManager.render_sync(fetch_url)
 
-            html_content = result["html"]
-            
-            # ----------------------------------------------------
-            # 🔗 Base Tag Injection (Fixes broken CSS/Images locally)
-            # ----------------------------------------------------
-            if "<base" not in html_content.lower():
-                import re
-                # Insert <base> immediately after <head>
-                html_content = re.sub(
-                    r"(<head[^>]*>)",
-                    rf'\1<base href="{fetch_url}">',
-                    html_content,
-                    count=1,
-                    flags=re.IGNORECASE
-                )
+            if not html_content:
+                return "failed", f"Empty render for site={self.siteid} url={url}", thread_name
+
+            # Base tag injection (keep your existing logic)
+            # if "<base" not in html_content.lower():
+            #     import re
+            #     html_content = re.sub(
+            #         r"(<head[^>]*>)",
+            #         rf'\1<base href="{fetch_url}">',
+            #         html_content,
+            #         count=1,
+            #         flags=re.IGNORECASE
+            #     )
 
             baseline_id, path, action = save_baseline(
                 custid=self.custid,
                 siteid=self.siteid,
-                url=url,              # IMPORTANT: DB identity
+                url=url,
                 html=html_content,
-                enforce_www=self.enforce_www # ✅ Match site preference
-            )
+                enforce_www=self.enforce_www
+            )   
 
             return action, f"id={baseline_id} url={url}", thread_name
 
