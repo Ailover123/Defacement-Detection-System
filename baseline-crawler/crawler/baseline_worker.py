@@ -19,11 +19,12 @@ class BaselineWorker:
     - Safely parallelizes fetch + baseline update
     """
 
-    def __init__(self, *, custid, siteid, seed_url, target_urls=None, heartbeat_callback=None):
+    def __init__(self, *, custid, siteid, seed_url, target_urls=None, waf_ip=None, heartbeat_callback=None):
         self.custid = custid
         self.siteid = siteid
         self.seed_url = seed_url
         self.target_urls = target_urls
+        self.waf_ip = waf_ip
         self.heartbeat_callback = heartbeat_callback
         
         # 🕵️ Detect if the site is registered with 'www.' to enforce it in canonical ID
@@ -51,8 +52,17 @@ class BaselineWorker:
             if CRAWL_DELAY > 0:
                 time.sleep(CRAWL_DELAY)
 
+            # Derive primary_host from seed_url (The exact domain from sites table)
+            primary_host = None
+            if self.seed_url:
+                from urllib.parse import urlparse
+                p_orig = urlparse(self.seed_url if "://" in self.seed_url else "https://" + self.seed_url)
+                primary_host = p_orig.netloc
+
             # 🔥 ALWAYS use Playwright for baseline
-            html_content, final_url, status_code = BrowserManager.render_sync(fetch_url)
+            html_content, final_url, status_code = BrowserManager.render_sync(
+                fetch_url, waf_ip=self.waf_ip, primary_host=primary_host
+            )
 
             if not html_content:
                 return "failed", f"Empty render for site={self.siteid} url={url}", thread_name
