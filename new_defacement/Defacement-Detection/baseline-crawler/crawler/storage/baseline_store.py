@@ -1,0 +1,121 @@
+# crawler/storage/baseline_store.py
+
+from pathlib import Path
+from crawler.storage.db import insert_defacement_site
+from crawler.storage.mysql import (
+    upsert_baseline_hash,
+    fetch_baseline_hash,
+    site_has_baselines,
+)
+from crawler.processor import LinkUtility, ContentNormalizer
+from crawler.core import logger
+
+import threading
+import os
+from dotenv import load_dotenv
+env_path = '/home/devadminsitewall/defacement/new_defacement/Defacement-Detection/baseline-crawler/.env'
+load_dotenv(dotenv_path=env_path)
+
+BASELINE_ROOT = os.getenv("defacement_dir")
+
+# Global lock and cache for sequence numbers
+_ID_LOCK = threading.Lock()
+_SITE_MAX_IDS = {}
+_SITE_HAS_BASELINES = {}
+
+
+# --------------------------------------------------
+# ID GENERATOR (UNCHANGED LOGIC, STABLE)
+# --------------------------------------------------
+def _next_baseline_id(site_dir: Path, siteid: int) -> str:
+    with _ID_LOCK:
+
+        if siteid not in _SITE_MAX_IDS:
+            max_seq = 0
+            prefix = f"{siteid}-"
+
+            if site_dir.exists():
+                for f in site_dir.glob(f"{siteid}-*.html"):
+                    try:
+                        stem = f.stem
+                        if stem.startswith(prefix):
+                            num = int(stem[len(prefix):])
+                            if num > max_seq:
+                                max_seq = num
+                    except ValueError:
+                        pass
+
+            _SITE_MAX_IDS[siteid] = max_seq
+
+        _SITE_MAX_IDS[siteid] += 1
+        return f"{siteid}-{_SITE_MAX_IDS[siteid]}"
+
+
+# --------------------------------------------------
+# FINAL STABLE BASELINE SAVE
+# --------------------------------------------------
+def save_baseline(*, custid, siteid, url, html, enforce_www=False):
+    """
+    Stable baseline logic:
+
+    - Canonicalize ONCE (respecting enforce_www)
+    - Handle www based on site preference
+    - Never re-canonicalize DB rows later
+    - Update existing baseline if present
+    """
+
+    # 🔒 Canonical for DB (Respecting site preference)
+    canonical = LinkUtility.get_canonical_id(url, enforce_www=enforce_www)
+
+    content_hash = ContentNormalizer.semantic_hash(html)
+
+    # site_dir = os.path.join(BASELINE_ROOT, "baseline", str(custid), str(siteid))
+    # site_dir = os.path.join(BASELINE_ROOT, "baseline", str(custid), str(siteid))
+    # os.makedirs(site_dir, exist_ok=True)
+    
+    site_dir = Path(BASELINE_ROOT) / "baseline" / str(custid) / str(siteid)
+    site_dir.mkdir(parents=True, exist_ok=True)
+
+    # --------------------------------------------------
+    # 1️⃣ Check existing baseline (NO base_url)
+    # --------------------------------------------------
+    existing = fetch_baseline_hash(
+        site_id=siteid,
+        normalized_url=canonical
+    )
+    
+    if siteid not in _SITE_HAS_BASELINES:
+        _SITE_HAS_BASELINES[siteid] = site_has_baselines(siteid)
+
+    if existing and existing.get("baseline_id"):
+        baseline_id = existing.get("baseline_id")
+        baseline_path = existing.get("baseline_path")
+        action = "updated"
+
+        # path = os.path.join(site_dir, f"{baseline_id}.html")
+        path = site_dir / f"{baseline_id}.html"
+
+        logger.info(
+            f"[BASELINE] path :- {path} {action.upper()} id={baseline_id} url={canonical}"
+        )
+
+        # --------------------------------------------------
+        # 3️⃣ Always overwrite file
+        # --------------------------------------------------
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(html.strip())
+
+        # --------------------------------------------------
+        # 4️⃣ Ensure defacement_sites stores canonical only
+        # --------------------------------------------------
+        datainsert = insert_defacement_site(
+            siteid=siteid,
+            baseline_id=baseline_id,
+            url=canonical,   #  STORE WITHOUT WWW
+        )
+        
+        logger.info(f"Data insert values :- {datainsert}")
+
+        return datainsert, content_hash
+    else:
+        return 0

@@ -1,0 +1,9 @@
+beautifulsoup4
+lxml
+requests
+mysql-connector-python
+python-dotenv
+playwright
+tldextract
+psutil
+brotli

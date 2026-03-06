@@ -1,0 +1,3349 @@
+
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Crawler | Security Report</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --accent-blue: #38bdf8;
+            --accent-red: #ef4444;
+            --accent-green: #22c55e;
+            --accent-yellow: #eab308;
+            --accent-orange: #f97316;
+            --critical-red: #991b1b;
+        }
+
+        [data-theme='dark'] {
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+            --glass: rgba(30, 41, 59, 0.7);
+            --border: rgba(255,255,255,0.1);
+            --border-dim: rgba(255,255,255,0.05);
+            --table-hover: rgba(255,255,255,0.02);
+            --stat-hover: rgba(56, 189, 248, 0.1);
+        }
+
+        [data-theme='light'] {
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #0f172a;
+            --text-dim: #64748b;
+            --glass: rgba(255, 255, 255, 0.7);
+            --border: rgba(0,0,0,0.1);
+            --border-dim: rgba(0,0,0,0.05);
+            --table-hover: rgba(0,0,0,0.02);
+            --stat-hover: rgba(56, 189, 248, 0.05);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 20px;
+            transition: background 0.3s, color 0.3s;
+        }
+
+        .container { max-width: 1200px; margin: 0 auto; }
+
+        /* Header */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 40px;
+            padding: 20px;
+            background: var(--glass);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            transition: background 0.3s, border 0.3s;
+        }
+
+        .logo-section { display: flex; align-items: center; gap: 20px; }
+        .logo { font-size: 24px; font-weight: 700; color: var(--accent-blue); }
+        
+        .header-actions { display: flex; align-items: center; gap: 15px; }
+        .btn-theme { 
+            background: var(--border); 
+            color: var(--text-main); 
+            border: none;
+            padding: 10px; 
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        .btn-theme:hover { transform: scale(1.1); background: var(--border-dim); }
+        
+        /* Icons */
+        .sun-icon { display: none; }
+        [data-theme='light'] .moon-icon { display: none; }
+        [data-theme='light'] .sun-icon { display: block; }
+
+        .timestamp { color: var(--text-dim); font-size: 14px; text-align: right; }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .stat-card {
+            background: var(--card-bg);
+            padding: 24px;
+            border-radius: 16px;
+            border: 1px solid var(--border-dim);
+            transition: transform 0.2s, border-color 0.2s;
+        }
+        .stat-card:hover { transform: translateY(-5px); border-color: var(--accent-blue); background: var(--stat-hover); }
+        .stat-label { color: var(--text-dim); font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
+        .stat-value { font-size: 32px; font-weight: 700; margin-top: 8px; }
+        .stat-value.alerts { color: var(--accent-red); }
+
+        /* Sections */
+        .section-title { font-size: 20px; font-weight: 600; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
+        .section-title::before { content: ''; width: 4px; height: 24px; background: var(--accent-blue); border-radius: 2px; }
+
+        /* Table Style */
+        .table-container {
+            background: var(--card-bg);
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid var(--border-dim);
+            margin-bottom: 40px;
+        }
+
+        table { width: 100%; border-collapse: collapse; text-align: left; }
+        th { 
+            background: var(--border-dim); 
+            color: var(--text-dim); 
+            padding: 12px 16px; 
+            font-weight: 600; 
+            font-size: 11px; 
+            text-transform: uppercase; 
+            border-bottom: 2px solid var(--border-dim);
+        }
+        
+        .sort-select {
+            background: transparent;
+            color: var(--accent-blue);
+            border: 1px solid rgba(56, 189, 248, 0.2);
+            border-radius: 4px;
+            font-size: 10px;
+            padding: 2px;
+            margin-left: 5px;
+            cursor: pointer;
+            outline: none;
+        }
+        .sort-select:hover { border-color: var(--accent-blue); }
+        .sort-select option { background: var(--card-bg); color: var(--text-main); }
+
+        td { padding: 14px 16px; border-top: 1px solid var(--border-dim); font-size: 13px; }
+        
+        tr:hover td { background: var(--table-hover); }
+
+        .badge {
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .badge-none { background: rgba(34, 197, 94, 0.2); color: var(--accent-green); }
+        .badge-low { background: rgba(234, 179, 8, 0.2); color: var(--accent-yellow); }
+        .badge-medium, .badge-med { background: rgba(249, 115, 22, 0.2); color: var(--accent-orange); }
+        .badge-high { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
+        .badge-critical { background: rgba(153, 27, 27, 0.2); color: var(--critical-red); }
+
+        .btn-view {
+            color: var(--accent-blue);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        .btn-view:hover { text-decoration: underline; }
+
+        /* Glossary */
+        .glossary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            background: rgba(255,255,255,0.02);
+            padding: 20px;
+            border-radius: 16px;
+            margin-bottom: 40px;
+            border: 1px dashed rgba(255,255,255,0.1);
+        }
+        .glossary-item b { color: var(--accent-blue); display: block; margin-bottom: 4px; }
+        .glossary-item p { font-size: 12px; color: var(--text-dim); }
+
+        .empty-state { padding: 40px; text-align: center; color: var(--text-dim); }
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo-section">
+                <div class="logo">Crawler <span style="font-weight: 300; color: var(--text-dim);">| Audit</span></div>
+                <button onclick="toggleTheme()" class="btn-theme" title="Toggle Light/Dark Mode">
+                    <span class="moon-icon">🌙</span>
+                    <span class="sun-icon">☀️</span>
+                </button>
+            </div>
+            <div class="timestamp">
+                <div>Last Updated</div>
+                <div style="color:var(--text-main); font-weight:600">2026-03-05 19:32:00 IST</div>
+            </div>
+        </header>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Sites</div>
+                <div class="stat-value">138</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Baselines</div>
+                <div class="stat-value">3215</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Pages</div>
+                <div class="stat-value">7609</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Critical Alerts</div>
+                <div class="stat-value alerts">16337</div>
+            </div>
+        </div>
+
+        <div class="section-title">Severity Glossary</div>
+        <div class="glossary">
+            <div class="glossary-item">
+                <span class="badge badge-low">LOW</span>
+                <p>Minor meta-tag or layout shifts (< 5%). Likely noise or tracking nonces.</p>
+            </div>
+            <div class="glossary-item">
+                <span class="badge badge-medium">MEDIUM</span>
+                <p>Partial content changes (5-20%). Text updates or layout alterations.</p>
+            </div>
+            <div class="glossary-item">
+                <span class="badge badge-high">HIGH</span>
+                <p>Major content modification (20-50%). Sections missing or swapped.</p>
+            </div>
+            <div class="glossary-item">
+                <span class="badge badge-critical">CRITICAL</span>
+                <p>Complete data loss or structure change (> 50%). Highly suspicious.</p>
+            </div>
+        </div>
+
+        <div class="section-title">Detection Alerts (Most Recent 200)</div>
+        <p style="margin-bottom:10px; font-size:12px; color:var(--text-dim)">Use dropdowns to sort columns. Row IDs allow easy counting.</p>
+        <div class="table-container">
+            <table id="alertsTable">
+                <thead>
+                    <tr>
+                        <th>##</th>
+                        <th>
+                            Site ID 
+                            <select class="sort-select" onchange="sortTable(1, this.value)">
+                                <option value="">Sort</option>
+                                <option value="asc">↑ Asc</option>
+                                <option value="desc">↓ Desc</option>
+                            </select>
+                        </th>
+                        <th>
+                            Target URL
+                            <select class="sort-select" onchange="sortTable(2, this.value)">
+                                <option value="">Sort</option>
+                                <option value="asc">A-Z</option>
+                                <option value="desc">Z-A</option>
+                            </select>
+                        </th>
+                        <th>
+                            Score
+                            <select class="sort-select" onchange="sortTable(3, this.value)">
+                                <option value="">Sort</option>
+                                <option value="asc">Lowest</option>
+                                <option value="desc">Highest</option>
+                            </select>
+                        </th>
+                        <th>
+                            Severity
+                            <select class="sort-select" onchange="sortTable(4, this.value)">
+                                <option value="">Sort</option>
+                                <option value="asc">Min</option>
+                                <option value="desc">Max</option>
+                            </select>
+                        </th>
+                        <th>
+                            Detected At
+                            <select class="sort-select" onchange="sortTable(5, this.value)">
+                                <option value="">Sort</option>
+                                <option value="asc">Oldest</option>
+                                <option value="desc">Newest</option>
+                            </select>
+                        </th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">1</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/services/categories</td>
+                        <td><strong>13.48%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 20:31</td>
+                        <td><a href="../diffs/330/33000/15015726022026-33000-29.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">2</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/advertise-with-us</td>
+                        <td><strong>22.56%</strong></td>
+                        <td><span class="badge badge-high">HIGH</span></td>
+                        <td class="timestamp">2026-02-26 20:31</td>
+                        <td><a href="../diffs/330/33000/15015526022026-33000-23.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">3</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/ideas/categories</td>
+                        <td><strong>16.84%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 20:31</td>
+                        <td><a href="../diffs/330/33000/15015426022026-33000-21.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">4</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/products/categories</td>
+                        <td><strong>18.39%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 20:31</td>
+                        <td><a href="../diffs/330/33000/15015326022026-33000-20.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">5</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/videos</td>
+                        <td><strong>86.62%</strong></td>
+                        <td><span class="badge badge-critical">CRITICAL</span></td>
+                        <td class="timestamp">2026-02-26 20:31</td>
+                        <td><a href="../diffs/330/33000/15015326022026-33000-38.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">6</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/brands</td>
+                        <td><strong>15.68%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 20:31</td>
+                        <td><a href="../diffs/330/33000/15015226022026-33000-19.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">7</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/visualizer</td>
+                        <td><strong>7.14%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 20:31</td>
+                        <td><a href="../diffs/330/33000/15015026022026-33000-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">8</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com</td>
+                        <td><strong>13.54%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 20:31</td>
+                        <td><a href="../diffs/330/33000/15014826022026-33000-28.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">9</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/career</td>
+                        <td><strong>10.73%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14252226022026-31900-36.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">10</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/about-us</td>
+                        <td><strong>9.45%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14251926022026-31900-33.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">11</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/absorbent-cotton-fibre</td>
+                        <td><strong>9.54%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14251926022026-31900-45.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">12</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/investors</td>
+                        <td><strong>6.23%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14252026022026-31900-39.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">13</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-balls</td>
+                        <td><strong>9.87%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14251726022026-31900-35.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">14</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/exfoliating-pads</td>
+                        <td><strong>9.84%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14251526022026-31900-37.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">15</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-pads</td>
+                        <td><strong>9.63%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14251626022026-31900-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">16</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-woll-rolls</td>
+                        <td><strong>9.52%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14251426022026-31900-47.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">17</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-spunlace-rolls-tapes</td>
+                        <td><strong>9.53%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14251426022026-31900-40.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">18</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products</td>
+                        <td><strong>8.43%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14251026022026-31900-41.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">19</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/investors</td>
+                        <td><strong>6.28%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14251026022026-31900-39.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">20</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/sustainability</td>
+                        <td><strong>10.55%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14250826022026-31900-49.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">21</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/contact-us</td>
+                        <td><strong>9.34%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14250926022026-31900-44.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">22</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/private-label</td>
+                        <td><strong>9.95%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14250726022026-31900-42.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">23</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/social-responsibility</td>
+                        <td><strong>9.94%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14250426022026-31900-46.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">24</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/hygiene</td>
+                        <td><strong>11.09%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14250526022026-31900-38.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">25</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/spinning</td>
+                        <td><strong>11.56%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14250326022026-31900-48.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">26</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/yarns-threads</td>
+                        <td><strong>10.15%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:55</td>
+                        <td><a href="../diffs/319/31900/14250026022026-31900-50.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">27</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/absorbent-cotton-fibre</td>
+                        <td><strong>9.54%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:54</td>
+                        <td><a href="../diffs/319/31900/14245826022026-31900-45.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">28</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-pads</td>
+                        <td><strong>9.83%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:54</td>
+                        <td><a href="../diffs/319/31900/14245926022026-31900-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">29</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-woll-rolls</td>
+                        <td><strong>9.98%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:54</td>
+                        <td><a href="../diffs/319/31900/14245726022026-31900-47.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">30</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-balls</td>
+                        <td><strong>9.87%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:54</td>
+                        <td><a href="../diffs/319/31900/14245726022026-31900-35.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">31</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products</td>
+                        <td><strong>8.86%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:54</td>
+                        <td><a href="../diffs/319/31900/14245726022026-31900-41.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">32</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-spunlace-rolls-tapes</td>
+                        <td><strong>9.53%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:54</td>
+                        <td><a href="../diffs/319/31900/14245326022026-31900-40.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">33</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/exfoliating-pads</td>
+                        <td><strong>9.55%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:54</td>
+                        <td><a href="../diffs/319/31900/14245126022026-31900-37.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">34</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com</td>
+                        <td><strong>8.59%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-26 19:54</td>
+                        <td><a href="../diffs/319/31900/14244926022026-31900-43.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">35</b></td>
+                        <td>30700</td>
+                        <td style="word-break: break-all; max-width: 400px;">snap.com/onebvc.bestvaluechem.com/opman</td>
+                        <td><strong>47.42%</strong></td>
+                        <td><span class="badge badge-high">HIGH</span></td>
+                        <td class="timestamp">2026-02-26 19:50</td>
+                        <td><a href="../diffs/307/30700/14202626022026-30700-2.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">36</b></td>
+                        <td>27305</td>
+                        <td style="word-break: break-all; max-width: 400px;">inspect.log/cbo.bfsl.co.in/Account/ForgotUser</td>
+                        <td><strong>1.05%</strong></td>
+                        <td><span class="badge badge-low">LOW</span></td>
+                        <td class="timestamp">2026-02-26 19:46</td>
+                        <td><a href="../diffs/273/27305/14160326022026-27305-3.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">37</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/services/categories</td>
+                        <td><strong>7.0%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 21:23</td>
+                        <td><a href="../diffs/330/33000/15535825022026-33000-29.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">38</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/advertise-with-us</td>
+                        <td><strong>8.9%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 21:23</td>
+                        <td><a href="../diffs/330/33000/15535625022026-33000-23.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">39</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/brands</td>
+                        <td><strong>13.9%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 21:23</td>
+                        <td><a href="../diffs/330/33000/15534625022026-33000-19.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">40</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/products/categories</td>
+                        <td><strong>5.75%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 21:23</td>
+                        <td><a href="../diffs/330/33000/15534625022026-33000-20.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">41</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/ideas/categories</td>
+                        <td><strong>5.86%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 21:23</td>
+                        <td><a href="../diffs/330/33000/15534625022026-33000-21.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">42</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/videos</td>
+                        <td><strong>86.67%</strong></td>
+                        <td><span class="badge badge-critical">CRITICAL</span></td>
+                        <td class="timestamp">2026-02-25 21:23</td>
+                        <td><a href="../diffs/330/33000/15534625022026-33000-38.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">43</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/visualizer</td>
+                        <td><strong>9.8%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 21:23</td>
+                        <td><a href="../diffs/330/33000/15534525022026-33000-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">44</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com</td>
+                        <td><strong>14.35%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 21:23</td>
+                        <td><a href="../diffs/330/33000/15534025022026-33000-28.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">45</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/career</td>
+                        <td><strong>10.03%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:18</td>
+                        <td><a href="../diffs/319/31900/14480825022026-31900-36.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">46</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/investors</td>
+                        <td><strong>6.25%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:18</td>
+                        <td><a href="../diffs/319/31900/14480825022026-31900-39.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">47</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/absorbent-cotton-fibre</td>
+                        <td><strong>9.54%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:18</td>
+                        <td><a href="../diffs/319/31900/14480725022026-31900-45.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">48</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/about-us</td>
+                        <td><strong>9.76%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:18</td>
+                        <td><a href="../diffs/319/31900/14480825022026-31900-33.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">49</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-woll-rolls</td>
+                        <td><strong>9.94%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:18</td>
+                        <td><a href="../diffs/319/31900/14480525022026-31900-47.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">50</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-spunlace-rolls-tapes</td>
+                        <td><strong>9.49%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:18</td>
+                        <td><a href="../diffs/319/31900/14480425022026-31900-40.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">51</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products</td>
+                        <td><strong>8.55%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:18</td>
+                        <td><a href="../diffs/319/31900/14480225022026-31900-41.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">52</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/exfoliating-pads</td>
+                        <td><strong>9.72%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:18</td>
+                        <td><a href="../diffs/319/31900/14480225022026-31900-37.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">53</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-balls</td>
+                        <td><strong>9.33%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:18</td>
+                        <td><a href="../diffs/319/31900/14480225022026-31900-35.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">54</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-pads</td>
+                        <td><strong>9.35%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:18</td>
+                        <td><a href="../diffs/319/31900/14480025022026-31900-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">55</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/investors</td>
+                        <td><strong>6.25%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14475825022026-31900-39.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">56</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/contact-us</td>
+                        <td><strong>9.34%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14475625022026-31900-44.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">57</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/sustainability</td>
+                        <td><strong>10.55%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14475725022026-31900-49.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">58</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/spinning</td>
+                        <td><strong>11.65%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14475525022026-31900-48.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">59</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/social-responsibility</td>
+                        <td><strong>10.42%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14475525022026-31900-46.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">60</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/private-label</td>
+                        <td><strong>9.4%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14475125022026-31900-42.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">61</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/hygiene</td>
+                        <td><strong>10.82%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14475225022026-31900-38.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">62</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/yarns-threads</td>
+                        <td><strong>10.15%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14475125022026-31900-50.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">63</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-pads</td>
+                        <td><strong>9.31%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14474925022026-31900-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">64</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-balls</td>
+                        <td><strong>9.87%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14474925022026-31900-35.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">65</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/absorbent-cotton-fibre</td>
+                        <td><strong>9.54%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14474825022026-31900-45.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">66</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-spunlace-rolls-tapes</td>
+                        <td><strong>9.57%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14474725022026-31900-40.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">67</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products</td>
+                        <td><strong>8.47%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14474625022026-31900-41.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">68</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/exfoliating-pads</td>
+                        <td><strong>9.51%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14474325022026-31900-37.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">69</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-woll-rolls</td>
+                        <td><strong>9.86%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14474325022026-31900-47.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">70</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com</td>
+                        <td><strong>8.47%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-25 20:17</td>
+                        <td><a href="../diffs/319/31900/14474025022026-31900-43.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">71</b></td>
+                        <td>30700</td>
+                        <td style="word-break: break-all; max-width: 400px;">snap.com/onebvc.bestvaluechem.com/opman</td>
+                        <td><strong>47.42%</strong></td>
+                        <td><span class="badge badge-high">HIGH</span></td>
+                        <td class="timestamp">2026-02-25 20:12</td>
+                        <td><a href="../diffs/307/30700/14422825022026-30700-2.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">72</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/advertise-with-us</td>
+                        <td><strong>6.91%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 21:10</td>
+                        <td><a href="../diffs/330/33000/15401124022026-33000-23.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">73</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/services/categories</td>
+                        <td><strong>6.55%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 21:10</td>
+                        <td><a href="../diffs/330/33000/15401124022026-33000-29.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">74</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/brands</td>
+                        <td><strong>12.37%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 21:10</td>
+                        <td><a href="../diffs/330/33000/15400724022026-33000-19.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">75</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/products/categories</td>
+                        <td><strong>6.05%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 21:10</td>
+                        <td><a href="../diffs/330/33000/15400724022026-33000-20.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">76</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/ideas/categories</td>
+                        <td><strong>4.7%</strong></td>
+                        <td><span class="badge badge-low">LOW</span></td>
+                        <td class="timestamp">2026-02-24 21:10</td>
+                        <td><a href="../diffs/330/33000/15400724022026-33000-21.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">77</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/videos</td>
+                        <td><strong>87.83%</strong></td>
+                        <td><span class="badge badge-critical">CRITICAL</span></td>
+                        <td class="timestamp">2026-02-24 21:10</td>
+                        <td><a href="../diffs/330/33000/15400724022026-33000-38.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">78</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/visualizer</td>
+                        <td><strong>20.93%</strong></td>
+                        <td><span class="badge badge-high">HIGH</span></td>
+                        <td class="timestamp">2026-02-24 21:10</td>
+                        <td><a href="../diffs/330/33000/15400624022026-33000-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">79</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com</td>
+                        <td><strong>1.02%</strong></td>
+                        <td><span class="badge badge-low">LOW</span></td>
+                        <td class="timestamp">2026-02-24 21:10</td>
+                        <td><a href="../diffs/330/33000/15400024022026-33000-28.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">80</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/investors</td>
+                        <td><strong>6.18%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14354624022026-31900-39.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">81</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/career</td>
+                        <td><strong>10.03%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14354624022026-31900-36.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">82</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/absorbent-cotton-fibre</td>
+                        <td><strong>9.46%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14354424022026-31900-45.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">83</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-spunlace-rolls-tapes</td>
+                        <td><strong>9.41%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14354424022026-31900-40.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">84</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/about-us</td>
+                        <td><strong>9.45%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14354424022026-31900-33.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">85</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-woll-rolls</td>
+                        <td><strong>9.4%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14354224022026-31900-47.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">86</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/exfoliating-pads</td>
+                        <td><strong>9.72%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14354124022026-31900-37.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">87</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-pads</td>
+                        <td><strong>9.06%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14353924022026-31900-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">88</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-balls</td>
+                        <td><strong>9.33%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14353924022026-31900-35.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">89</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products</td>
+                        <td><strong>8.35%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14353824022026-31900-41.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">90</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/investors</td>
+                        <td><strong>6.18%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14353724022026-31900-39.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">91</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/contact-us</td>
+                        <td><strong>9.34%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14353524022026-31900-44.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">92</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/spinning</td>
+                        <td><strong>11.47%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14353424022026-31900-48.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">93</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/sustainability</td>
+                        <td><strong>10.19%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14353324022026-31900-49.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">94</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/social-responsibility</td>
+                        <td><strong>9.84%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14353324022026-31900-46.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">95</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/hygiene</td>
+                        <td><strong>10.91%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14353124022026-31900-38.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">96</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/absorbent-cotton-fibre</td>
+                        <td><strong>9.46%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14352924022026-31900-45.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">97</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/private-label</td>
+                        <td><strong>9.3%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14352924022026-31900-42.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">98</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-spunlace-rolls-tapes</td>
+                        <td><strong>9.41%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14352824022026-31900-40.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">99</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/yarns-threads</td>
+                        <td><strong>9.98%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14352824022026-31900-50.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">100</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-pads</td>
+                        <td><strong>9.06%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14352524022026-31900-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">101</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-balls</td>
+                        <td><strong>9.33%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14352424022026-31900-35.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">102</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-woll-rolls</td>
+                        <td><strong>9.4%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14352424022026-31900-47.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">103</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products</td>
+                        <td><strong>8.43%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14352424022026-31900-41.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">104</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/exfoliating-pads</td>
+                        <td><strong>9.42%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14352324022026-31900-37.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">105</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com</td>
+                        <td><strong>8.38%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-24 20:05</td>
+                        <td><a href="../diffs/319/31900/14351924022026-31900-43.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">106</b></td>
+                        <td>30700</td>
+                        <td style="word-break: break-all; max-width: 400px;">snap.com/onebvc.bestvaluechem.com/opman</td>
+                        <td><strong>47.42%</strong></td>
+                        <td><span class="badge badge-high">HIGH</span></td>
+                        <td class="timestamp">2026-02-24 20:00</td>
+                        <td><a href="../diffs/307/30700/14301724022026-30700-2.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">107</b></td>
+                        <td>27305</td>
+                        <td style="word-break: break-all; max-width: 400px;">inspect.log/cbo.bfsl.co.in/Account/ForgotUser</td>
+                        <td><strong>1.05%</strong></td>
+                        <td><span class="badge badge-low">LOW</span></td>
+                        <td class="timestamp">2026-02-24 19:55</td>
+                        <td><a href="../diffs/273/27305/14254924022026-27305-3.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">108</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/services/categories</td>
+                        <td><strong>4.97%</strong></td>
+                        <td><span class="badge badge-low">LOW</span></td>
+                        <td class="timestamp">2026-02-23 21:10</td>
+                        <td><a href="../diffs/330/33000/15405123022026-33000-29.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">109</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/advertise-with-us</td>
+                        <td><strong>13.92%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 21:10</td>
+                        <td><a href="../diffs/330/33000/15404923022026-33000-23.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">110</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/products/categories</td>
+                        <td><strong>6.58%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 21:10</td>
+                        <td><a href="../diffs/330/33000/15404723022026-33000-20.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">111</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/ideas/categories</td>
+                        <td><strong>2.93%</strong></td>
+                        <td><span class="badge badge-low">LOW</span></td>
+                        <td class="timestamp">2026-02-23 21:10</td>
+                        <td><a href="../diffs/330/33000/15404723022026-33000-21.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">112</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/brands</td>
+                        <td><strong>7.71%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 21:10</td>
+                        <td><a href="../diffs/330/33000/15404723022026-33000-19.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">113</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/videos</td>
+                        <td><strong>86.46%</strong></td>
+                        <td><span class="badge badge-critical">CRITICAL</span></td>
+                        <td class="timestamp">2026-02-23 21:10</td>
+                        <td><a href="../diffs/330/33000/15404723022026-33000-38.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">114</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/visualizer</td>
+                        <td><strong>95.35%</strong></td>
+                        <td><span class="badge badge-critical">CRITICAL</span></td>
+                        <td class="timestamp">2026-02-23 21:10</td>
+                        <td><a href="../diffs/330/33000/15404623022026-33000-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">115</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com</td>
+                        <td><strong>12.79%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 21:10</td>
+                        <td><a href="../diffs/330/33000/15404223022026-33000-28.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">116</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/career</td>
+                        <td><strong>10.14%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14365023022026-31900-36.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">117</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/investors</td>
+                        <td><strong>6.23%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14365023022026-31900-39.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">118</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-woll-rolls</td>
+                        <td><strong>9.94%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14364923022026-31900-47.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">119</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-balls</td>
+                        <td><strong>9.87%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14364823022026-31900-35.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">120</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/absorbent-cotton-fibre</td>
+                        <td><strong>9.54%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14364623022026-31900-45.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">121</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/about-us</td>
+                        <td><strong>9.56%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14364623022026-31900-33.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">122</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-spunlace-rolls-tapes</td>
+                        <td><strong>9.53%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14364423022026-31900-40.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">123</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-pads</td>
+                        <td><strong>9.14%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14364223022026-31900-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">124</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/exfoliating-pads</td>
+                        <td><strong>9.59%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14364323022026-31900-37.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">125</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products</td>
+                        <td><strong>8.62%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14364123022026-31900-41.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">126</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/spinning</td>
+                        <td><strong>11.95%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14364123022026-31900-48.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">127</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/contact-us</td>
+                        <td><strong>9.39%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14363923022026-31900-44.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">128</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/investors</td>
+                        <td><strong>6.36%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14363923022026-31900-39.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">129</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/hygiene</td>
+                        <td><strong>11.62%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14363823022026-31900-38.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">130</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/social-responsibility</td>
+                        <td><strong>10.05%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14363623022026-31900-46.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">131</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/sustainability</td>
+                        <td><strong>10.19%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14363523022026-31900-49.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">132</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/yarns-threads</td>
+                        <td><strong>10.04%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14363223022026-31900-50.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">133</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/private-label</td>
+                        <td><strong>9.4%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14363323022026-31900-42.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">134</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/absorbent-cotton-fibre</td>
+                        <td><strong>9.46%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14363323022026-31900-45.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">135</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/exfoliating-pads</td>
+                        <td><strong>9.92%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14363123022026-31900-37.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">136</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-pads</td>
+                        <td><strong>9.59%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14362923022026-31900-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">137</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-spunlace-rolls-tapes</td>
+                        <td><strong>9.53%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14362823022026-31900-40.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">138</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products</td>
+                        <td><strong>8.51%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14362823022026-31900-41.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">139</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-balls</td>
+                        <td><strong>9.33%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14362923022026-31900-35.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">140</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-woll-rolls</td>
+                        <td><strong>9.48%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14362523022026-31900-47.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">141</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com</td>
+                        <td><strong>8.47%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-23 20:06</td>
+                        <td><a href="../diffs/319/31900/14362223022026-31900-43.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">142</b></td>
+                        <td>30700</td>
+                        <td style="word-break: break-all; max-width: 400px;">snap.com/onebvc.bestvaluechem.com/opman</td>
+                        <td><strong>47.42%</strong></td>
+                        <td><span class="badge badge-high">HIGH</span></td>
+                        <td class="timestamp">2026-02-23 20:01</td>
+                        <td><a href="../diffs/307/30700/14312623022026-30700-2.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">143</b></td>
+                        <td>27305</td>
+                        <td style="word-break: break-all; max-width: 400px;">inspect.log/cbo.bfsl.co.in/Account/ForgotUser</td>
+                        <td><strong>1.05%</strong></td>
+                        <td><span class="badge badge-low">LOW</span></td>
+                        <td class="timestamp">2026-02-23 19:56</td>
+                        <td><a href="../diffs/273/27305/14264723022026-27305-3.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">144</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/products/categories</td>
+                        <td><strong>6.28%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 20:54</td>
+                        <td><a href="../diffs/330/33000/15240722022026-33000-20.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">145</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/ideas/categories</td>
+                        <td><strong>4.98%</strong></td>
+                        <td><span class="badge badge-low">LOW</span></td>
+                        <td class="timestamp">2026-02-22 20:54</td>
+                        <td><a href="../diffs/330/33000/15240722022026-33000-21.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">146</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/videos</td>
+                        <td><strong>86.46%</strong></td>
+                        <td><span class="badge badge-critical">CRITICAL</span></td>
+                        <td class="timestamp">2026-02-22 20:54</td>
+                        <td><a href="../diffs/330/33000/15240722022026-33000-38.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">147</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/advertise-with-us</td>
+                        <td><strong>6.66%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 20:54</td>
+                        <td><a href="../diffs/330/33000/15240822022026-33000-23.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">148</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/visualizer</td>
+                        <td><strong>5.15%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 20:54</td>
+                        <td><a href="../diffs/330/33000/15240622022026-33000-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">149</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/brands</td>
+                        <td><strong>7.54%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 20:54</td>
+                        <td><a href="../diffs/330/33000/15240722022026-33000-19.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">150</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com</td>
+                        <td><strong>12.49%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 20:54</td>
+                        <td><a href="../diffs/330/33000/15240022022026-33000-28.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">151</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/investors</td>
+                        <td><strong>6.18%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14194122022026-31900-39.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">152</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/about-us</td>
+                        <td><strong>9.66%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14194122022026-31900-33.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">153</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/career</td>
+                        <td><strong>9.97%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14194122022026-31900-36.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">154</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-spunlace-rolls-tapes</td>
+                        <td><strong>9.45%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14193922022026-31900-40.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">155</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/absorbent-cotton-fibre</td>
+                        <td><strong>9.46%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14193922022026-31900-45.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">156</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-woll-rolls</td>
+                        <td><strong>9.44%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14193822022026-31900-47.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">157</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-balls</td>
+                        <td><strong>9.33%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14193622022026-31900-35.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">158</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/exfoliating-pads</td>
+                        <td><strong>9.38%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14193622022026-31900-37.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">159</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-pads</td>
+                        <td><strong>9.1%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14193522022026-31900-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">160</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products</td>
+                        <td><strong>8.35%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14193422022026-31900-41.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">161</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/investors</td>
+                        <td><strong>6.18%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14193222022026-31900-39.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">162</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/contact-us</td>
+                        <td><strong>9.29%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14193122022026-31900-44.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">163</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/social-responsibility</td>
+                        <td><strong>9.84%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14193022022026-31900-46.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">164</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/spinning</td>
+                        <td><strong>11.39%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14193022022026-31900-48.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">165</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/sustainability</td>
+                        <td><strong>9.88%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14192922022026-31900-49.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">166</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/hygiene</td>
+                        <td><strong>10.82%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14192722022026-31900-38.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">167</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/private-label</td>
+                        <td><strong>9.3%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14192522022026-31900-42.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">168</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-spunlace-rolls-tapes</td>
+                        <td><strong>9.45%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14192522022026-31900-40.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">169</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/absorbent-cotton-fibre</td>
+                        <td><strong>9.46%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14192522022026-31900-45.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">170</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/yarns-threads</td>
+                        <td><strong>10.04%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14192422022026-31900-50.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">171</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/exfoliating-pads</td>
+                        <td><strong>9.47%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14192122022026-31900-37.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">172</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-woll-rolls</td>
+                        <td><strong>9.44%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14192022022026-31900-47.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">173</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-balls</td>
+                        <td><strong>9.33%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14192022022026-31900-35.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">174</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-pads</td>
+                        <td><strong>9.1%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14192022022026-31900-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">175</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products</td>
+                        <td><strong>8.35%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14191922022026-31900-41.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">176</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com</td>
+                        <td><strong>8.38%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-22 19:49</td>
+                        <td><a href="../diffs/319/31900/14191522022026-31900-43.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">177</b></td>
+                        <td>30700</td>
+                        <td style="word-break: break-all; max-width: 400px;">snap.com/onebvc.bestvaluechem.com/opman</td>
+                        <td><strong>47.42%</strong></td>
+                        <td><span class="badge badge-high">HIGH</span></td>
+                        <td class="timestamp">2026-02-22 19:44</td>
+                        <td><a href="../diffs/307/30700/14141722022026-30700-2.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">178</b></td>
+                        <td>27305</td>
+                        <td style="word-break: break-all; max-width: 400px;">inspect.log/cbo.bfsl.co.in/Account/ForgotUser</td>
+                        <td><strong>1.05%</strong></td>
+                        <td><span class="badge badge-low">LOW</span></td>
+                        <td class="timestamp">2026-02-22 19:39</td>
+                        <td><a href="../diffs/273/27305/14094922022026-27305-3.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">179</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/services/categories</td>
+                        <td><strong>12.12%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 20:59</td>
+                        <td><a href="../diffs/330/33000/15293821022026-33000-29.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">180</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/advertise-with-us</td>
+                        <td><strong>14.09%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 20:59</td>
+                        <td><a href="../diffs/330/33000/15293621022026-33000-23.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">181</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/products/categories</td>
+                        <td><strong>5.23%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 20:59</td>
+                        <td><a href="../diffs/330/33000/15292721022026-33000-20.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">182</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/ideas/categories</td>
+                        <td><strong>3.07%</strong></td>
+                        <td><span class="badge badge-low">LOW</span></td>
+                        <td class="timestamp">2026-02-21 20:59</td>
+                        <td><a href="../diffs/330/33000/15292721022026-33000-21.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">183</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/videos</td>
+                        <td><strong>86.46%</strong></td>
+                        <td><span class="badge badge-critical">CRITICAL</span></td>
+                        <td class="timestamp">2026-02-21 20:59</td>
+                        <td><a href="../diffs/330/33000/15292721022026-33000-38.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">184</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/visualizer</td>
+                        <td><strong>5.15%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 20:59</td>
+                        <td><a href="../diffs/330/33000/15292521022026-33000-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">185</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com/brands</td>
+                        <td><strong>4.66%</strong></td>
+                        <td><span class="badge badge-low">LOW</span></td>
+                        <td class="timestamp">2026-02-21 20:59</td>
+                        <td><a href="../diffs/330/33000/15292621022026-33000-19.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">186</b></td>
+                        <td>33000</td>
+                        <td style="word-break: break-all; max-width: 400px;">newtest.co.in/fedstage.buildingworld.com</td>
+                        <td><strong>13.12%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 20:59</td>
+                        <td><a href="../diffs/330/33000/15292121022026-33000-28.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">187</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/career</td>
+                        <td><strong>10.03%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14281521022026-31900-36.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">188</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/investors</td>
+                        <td><strong>6.23%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14281521022026-31900-39.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">189</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-spunlace-rolls-tapes</td>
+                        <td><strong>9.45%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14281321022026-31900-40.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">190</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/absorbent-cotton-fibre</td>
+                        <td><strong>9.46%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14281321022026-31900-45.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">191</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-woll-rolls</td>
+                        <td><strong>9.44%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14281221022026-31900-47.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">192</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/about-us</td>
+                        <td><strong>9.56%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14281321022026-31900-33.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">193</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/exfoliating-pads</td>
+                        <td><strong>9.42%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14281121022026-31900-37.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">194</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-pads</td>
+                        <td><strong>9.18%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14280721022026-31900-34.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">195</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products/cotton-balls</td>
+                        <td><strong>9.29%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14280821022026-31900-35.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">196</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/investors</td>
+                        <td><strong>6.36%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14280621022026-31900-39.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">197</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/cotton-products</td>
+                        <td><strong>8.35%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14280721022026-31900-41.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">198</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/contact-us</td>
+                        <td><strong>9.39%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14280621022026-31900-44.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">199</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/spinning</td>
+                        <td><strong>11.47%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14280321022026-31900-48.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                    <tr>
+                        <td><b style="color:var(--text-dim)">200</b></td>
+                        <td>31900</td>
+                        <td style="word-break: break-all; max-width: 400px;">demo.api.in/precot.com/social-responsibility</td>
+                        <td><strong>9.84%</strong></td>
+                        <td><span class="badge badge-medium">MEDIUM</span></td>
+                        <td class="timestamp">2026-02-21 19:58</td>
+                        <td><a href="../diffs/319/31900/14280221022026-31900-46.html" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section-title">Domain Coverage</div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Site ID</th>
+                        <th>Domain</th>
+                        <th>Pages Crawled</th>
+                        <th>Active Alerts</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    
+                    <tr>
+                        <td>93200</td>
+                        <td>www.pagentra.com</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">2</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>93206</td>
+                        <td>www.sitewall.net</td>
+                        <td>81</td>
+                        <td><span style="color: var(--accent-red)">91</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10400</td>
+                        <td>raksha.co.in</td>
+                        <td>19</td>
+                        <td><span style="color: var(--accent-red)">114</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10700</td>
+                        <td>growth.infinitheism.com</td>
+                        <td>67</td>
+                        <td><span style="color: var(--accent-red)">559</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>11200</td>
+                        <td>sp.elgi.com</td>
+                        <td>12</td>
+                        <td><span style="color: var(--accent-red)">13</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>93219</td>
+                        <td>service.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">6</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10402</td>
+                        <td>www.squareworld.org</td>
+                        <td>9</td>
+                        <td><span style="color: var(--accent-red)">90</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>11201</td>
+                        <td>c-doc.elgi.com</td>
+                        <td>3</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>11202</td>
+                        <td>dp.elgi.com</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">7</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>11203</td>
+                        <td>ccs.elgi.com</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">13</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>93290</td>
+                        <td>admin.sitewall.net</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">8</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>12600</td>
+                        <td>www.intactit.com</td>
+                        <td>14</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>12700</td>
+                        <td>www.rubikinfotech.com</td>
+                        <td>39</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>13800</td>
+                        <td>alliancepro.in</td>
+                        <td>110</td>
+                        <td><span style="color: var(--accent-red)">668</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10701</td>
+                        <td>hdb.infinitheism.com</td>
+                        <td>279</td>
+                        <td><span style="color: var(--accent-red)">556</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14600</td>
+                        <td>www.sapphirefoods.in</td>
+                        <td>57</td>
+                        <td><span style="color: var(--accent-red)">171</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14603</td>
+                        <td>pitcompliance.sapphirefoods.in</td>
+                        <td>3</td>
+                        <td><span style="color: var(--accent-red)">2</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14604</td>
+                        <td>ebill.sapphirefoods.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14400</td>
+                        <td>caspianequity.in</td>
+                        <td>18</td>
+                        <td><span style="color: var(--accent-red)">161</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14401</td>
+                        <td>caspian.in</td>
+                        <td>18</td>
+                        <td><span style="color: var(--accent-red)">158</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14402</td>
+                        <td>caspiandebt.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14605</td>
+                        <td>portals1.sapphirefoods.in</td>
+                        <td>2</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14607</td>
+                        <td>helpdesk.sapphirefoods.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14608</td>
+                        <td>vendormaster.sapphirefoods.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>11208</td>
+                        <td>ecom.elgi.com</td>
+                        <td>3</td>
+                        <td><span style="color: var(--accent-red)">6</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17100</td>
+                        <td>unificap.com</td>
+                        <td>68</td>
+                        <td><span style="color: var(--accent-red)">507</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>11210</td>
+                        <td>mapps.elgi.com</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">10</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17400</td>
+                        <td>ieced.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17401</td>
+                        <td>klay.co.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17600</td>
+                        <td>oelaviation.com</td>
+                        <td>5</td>
+                        <td><span style="color: var(--accent-red)">30</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17403</td>
+                        <td>klay.live</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>15700</td>
+                        <td>caveoinfosystems.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">1</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>18300</td>
+                        <td>www.technociate.in</td>
+                        <td>8</td>
+                        <td><span style="color: var(--accent-red)">56</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>13801</td>
+                        <td>allianceproit.com</td>
+                        <td>110</td>
+                        <td><span style="color: var(--accent-red)">663</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>11213</td>
+                        <td>epay.elgi.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">5</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14403</td>
+                        <td>operations.caspianilms.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14404</td>
+                        <td>config.caspianilms.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14405</td>
+                        <td>reports.caspianilms.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14406</td>
+                        <td>lmsapi.caspianilms.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17602</td>
+                        <td>wamicapital.com</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">12</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17603</td>
+                        <td>patang.io</td>
+                        <td>226</td>
+                        <td><span style="color: var(--accent-red)">1471</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14506</td>
+                        <td>ftp.tvstyres.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">7</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>19400</td>
+                        <td>www.dvaitha.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">7</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>19700</td>
+                        <td>rfq.aban.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">7</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>20401</td>
+                        <td>einvoice.udhaiyamdhall.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10702</td>
+                        <td>futurestars.infinitheism.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10703</td>
+                        <td>infiniacademy.infinitheism.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10704</td>
+                        <td>gifting.infiniacademy.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10705</td>
+                        <td>payments.infinitheism.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10706</td>
+                        <td>registrations.infinitheism.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">8</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>21002</td>
+                        <td>approval.havmor.com</td>
+                        <td>2</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10707</td>
+                        <td>events.infinitheism.com</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">12</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>21003</td>
+                        <td>dms.havmor.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>21004</td>
+                        <td>hipl.billberrypos.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>21006</td>
+                        <td>hiplapi.billberrypos.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">6</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10708</td>
+                        <td>staging.infinitheism.com</td>
+                        <td>147</td>
+                        <td><span style="color: var(--accent-red)">597</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10709</td>
+                        <td>dev.infinitheism.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14500</td>
+                        <td>o2c.eurogrip.global</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">1</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>93213</td>
+                        <td>sugarnsalt.co.in</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">14</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>16801</td>
+                        <td>www.safezone.co.in</td>
+                        <td>19</td>
+                        <td><span style="color: var(--accent-red)">105</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>22800</td>
+                        <td>abdmdemo.gknmhospital.org/gknmh6_front</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14610</td>
+                        <td>customermaster.sapphirefoods.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>24200</td>
+                        <td>nallas.com</td>
+                        <td>217</td>
+                        <td><span style="color: var(--accent-red)">1511</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>11205</td>
+                        <td>airapi.elgi.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17608</td>
+                        <td>transworld.com</td>
+                        <td>207</td>
+                        <td><span style="color: var(--accent-red)">1276</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17609</td>
+                        <td>transgreenagro.com</td>
+                        <td>33</td>
+                        <td><span style="color: var(--accent-red)">179</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17612</td>
+                        <td>app.transworld.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">8</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17614</td>
+                        <td>gvp.patang.io</td>
+                        <td>2</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>18502</td>
+                        <td>www.manchester.global</td>
+                        <td>87</td>
+                        <td><span style="color: var(--accent-red)">121</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17615</td>
+                        <td>freight.patang.io</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">8</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>20402</td>
+                        <td>www.udhaiyamdhall.com</td>
+                        <td>43</td>
+                        <td><span style="color: var(--accent-red)">274</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>26700</td>
+                        <td>bm.lightmicrofinance.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>27304</td>
+                        <td>trading.bfsl.co.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>19704</td>
+                        <td>auth.masprod.apps.mas.aban.com/login/#/form</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">6</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>26702</td>
+                        <td>ho.lightmicrofinance.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10712</td>
+                        <td>infinitheism.com</td>
+                        <td>280</td>
+                        <td><span style="color: var(--accent-red)">2128</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17405</td>
+                        <td>klayzo.klay.co.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>29303</td>
+                        <td>amazon.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>29304</td>
+                        <td>api3.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17616</td>
+                        <td>www.mamisillam.com</td>
+                        <td>12</td>
+                        <td><span style="color: var(--accent-red)">37</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>26911</td>
+                        <td>attendance.sitewall.net</td>
+                        <td>3</td>
+                        <td><span style="color: var(--accent-red)">21</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>26912</td>
+                        <td>someshwr.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>22801</td>
+                        <td>myapps.gknmhospital.org</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>29500</td>
+                        <td>phigrid.in</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">6</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17617</td>
+                        <td>worldpeoplesolutions.com</td>
+                        <td>234</td>
+                        <td><span style="color: var(--accent-red)">396</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17618</td>
+                        <td>reelworldentertainment.com</td>
+                        <td>8</td>
+                        <td><span style="color: var(--accent-red)">42</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>21007</td>
+                        <td>lotte.billberrypos.com</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">7</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>29800</td>
+                        <td>unifimf.com</td>
+                        <td>34</td>
+                        <td><span style="color: var(--accent-red)">241</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>29900</td>
+                        <td>gateway.cybx.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>29901</td>
+                        <td>uat-kong.cybx.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>17620</td>
+                        <td>transworld-jets.com</td>
+                        <td>81</td>
+                        <td><span style="color: var(--accent-red)">261</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>30001</td>
+                        <td>APIiinterface.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>27305</td>
+                        <td>cbo.bfsl.co.in</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">7</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>22401</td>
+                        <td>outstrive.co</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">2</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>11204</td>
+                        <td>airapi-uat.elgi.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>14502</td>
+                        <td>mtrack.eurogriptyres.in</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">10</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>30400</td>
+                        <td>bankuat.sgitsys.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>30401</td>
+                        <td>sugunafoods.com</td>
+                        <td>126</td>
+                        <td><span style="color: var(--accent-red)">749</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>22802</td>
+                        <td>portal.gknmhospital.org/PatientWebPortal/</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">6</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>30402</td>
+                        <td>lbsales.sgitsys.com:9099/npick</td>
+                        <td>6</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>30403</td>
+                        <td>sugunaesourcing.com</td>
+                        <td>5</td>
+                        <td><span style="color: var(--accent-red)">20</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>30500</td>
+                        <td>hocco.in</td>
+                        <td>37</td>
+                        <td><span style="color: var(--accent-red)">196</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>30700</td>
+                        <td>onebvc.bestvaluechem.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">7</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>30501</td>
+                        <td>getphab.com</td>
+                        <td>81</td>
+                        <td><span style="color: var(--accent-red)">565</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>93241</td>
+                        <td>ipchecker.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">7</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>30800</td>
+                        <td>beltsotr.jkfenner.info</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>306223</td>
+                        <td>api4.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>306224</td>
+                        <td>api5.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>306225</td>
+                        <td>api6.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>30912</td>
+                        <td>dosc02.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>30913</td>
+                        <td>dosc01.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>22402</td>
+                        <td>hrmgenie.outstrive.co</td>
+                        <td>4</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>31500</td>
+                        <td>approvals.vadilalgroup.com</td>
+                        <td>2</td>
+                        <td><span style="color: var(--accent-red)">1</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>31600</td>
+                        <td>apps.airworks.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>93256</td>
+                        <td>admins.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>31501</td>
+                        <td>quality.vadilalgroup.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">7</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>31502</td>
+                        <td>riseuat.vadilalgroup.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>31900</td>
+                        <td>precot.com</td>
+                        <td>19</td>
+                        <td><span style="color: var(--accent-red)">182</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>31700</td>
+                        <td>dacl.co.in</td>
+                        <td>23</td>
+                        <td><span style="color: var(--accent-red)">136</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>29101</td>
+                        <td>los.pragatifin.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">6</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>32200</td>
+                        <td>sattvagroup.in</td>
+                        <td>203</td>
+                        <td><span style="color: var(--accent-red)">776</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>32201</td>
+                        <td>sattvagroup.com</td>
+                        <td>202</td>
+                        <td><span style="color: var(--accent-red)">657</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>29102</td>
+                        <td>losuat.pragatifin.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">6</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>32000</td>
+                        <td>sumidirect.sumichem.co.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>32300</td>
+                        <td>troikaapharma.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>10401</td>
+                        <td>optiz-scope.rakshasoc.com</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>93258</td>
+                        <td>tools.sitewall.net</td>
+                        <td>3</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>93259</td>
+                        <td>status.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">2</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>32700</td>
+                        <td>deb.ugc.ac.in</td>
+                        <td>60</td>
+                        <td><span style="color: var(--accent-red)">195</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>93260</td>
+                        <td>atul.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">8</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>25113</td>
+                        <td>pratham.sitewall.net</td>
+                        <td>4</td>
+                        <td><span style="color: var(--accent-red)">6</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>11608</td>
+                        <td>bhavanas.sitewall.net</td>
+                        <td>13</td>
+                        <td><span style="color: var(--accent-red)">6</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>32900</td>
+                        <td>lmsoperations.blacksoil.co.in</td>
+                        <td>1</td>
+                        <td><span style="color: var(--accent-red)">4</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>252251</td>
+                        <td>api1.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>32611</td>
+                        <td>someshwar.sitewall.net</td>
+                        <td>6</td>
+                        <td><span style="color: var(--accent-red)">30</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>32612</td>
+                        <td>sanil.sitewall.net</td>
+                        <td>16</td>
+                        <td><span style="color: var(--accent-red)">13</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>32515</td>
+                        <td>APIiinnterface.sitewall.net</td>
+                        <td>1</td>
+                        <td><span style="color: var(--text-dim)">0</span></td>
+                    </tr>
+                    
+                    <tr>
+                        <td>33000</td>
+                        <td>fedstage.buildingworld.com</td>
+                        <td>4142</td>
+                        <td><span style="color: var(--accent-red)">67</span></td>
+                    </tr>
+                    
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        function toggleTheme() {
+            const html = document.documentElement;
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('crawler-theme', newTheme);
+        }
+
+        // Initialize theme on load
+        (function() {
+            const savedTheme = localStorage.getItem('crawler-theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+        })();
+
+        function sortTable(n, dir) {
+            if (!dir) return;
+            var table, rows, switching, i, x, y, shouldSwitch, switchcount = 0;
+            table = document.getElementById("alertsTable");
+            switching = true;
+            
+            const selects = document.querySelectorAll('.sort-select');
+            selects.forEach((s, idx) => {
+                if (idx !== n-1) s.value = "";
+            });
+
+            while (switching) {
+                switching = false;
+                rows = table.rows;
+                for (i = 1; i < (rows.length - 1); i++) {
+                    shouldSwitch = false;
+                    x = rows[i].getElementsByTagName("TD")[n];
+                    y = rows[i + 1].getElementsByTagName("TD")[n];
+                    
+                    let xVal = x.innerHTML.toLowerCase();
+                    let yVal = y.innerHTML.toLowerCase();
+                    
+                    if (n === 1 || n === 3) {
+                        xVal = parseFloat(xVal.replace(/[^0-9.]/g, '')) || 0;
+                        yVal = parseFloat(yVal.replace(/[^0-9.]/g, '')) || 0;
+                    }
+
+                    if (dir === "asc") {
+                        if (xVal > yVal) { shouldSwitch = true; break; }
+                    } else if (dir === "desc") {
+                        if (xVal < yVal) { shouldSwitch = true; break; }
+                    }
+                }
+                if (shouldSwitch) {
+                    rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+                    switching = true;
+                    switchcount ++;
+                } 
+            }
+        }
+    </script>
+</body>
+</html>

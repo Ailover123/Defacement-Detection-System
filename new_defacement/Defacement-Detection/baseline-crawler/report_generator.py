@@ -1,0 +1,507 @@
+import os
+import mysql.connector
+import json
+from datetime import datetime, timedelta
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load configuration
+load_dotenv()
+
+def get_connection():
+    return mysql.connector.connect(
+        host=os.getenv("MYSQL_HOST"),
+        user=os.getenv("MYSQL_USER"),
+        password=os.getenv("MYSQL_PASSWORD"),
+        database=os.getenv("MYSQL_DATABASE")
+    )
+
+def generate_report():
+    print("Generating Static Report...")
+    
+    # Setup directories
+    base_dir = Path(__file__).resolve().parent
+    reports_dir = base_dir / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    latest_path = reports_dir / "latest_report.html"
+
+    # Cleanup: Remove old timestamped report files to keep directory clean
+    for old_report in reports_dir.glob("report_*.html"):
+        try:
+            old_report.unlink()
+        except Exception:
+            pass
+
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+
+        # 1. Fetch Summary Stats
+        cur.execute("SELECT COUNT(*) as count FROM sites_PROD")
+        total_enabled_sites = cur.fetchone()['count']
+
+        cur.execute("SELECT COUNT(*) as count FROM crawl_pages")
+        total_pages_crawled = cur.fetchone()['count']
+
+        cur.execute("SELECT COUNT(*) as count FROM crawl_defacement_sites WHERE content_hash IS NOT NULL")
+        total_baselines = cur.fetchone()['count']
+
+        cur.execute("SELECT COUNT(*) as count FROM observed_pages WHERE changed=1")
+        total_alerts = cur.fetchone()['count']
+
+        cur.execute(
+            """
+            SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'observed_pages'
+              AND COLUMN_NAME IN ('checked_at', 'created_at')
+            """
+        )
+        cols = {row["COLUMN_NAME"] for row in cur.fetchall()}
+        if "checked_at" in cols:
+            alerts_order_by = "o.checked_at"
+        elif "created_at" in cols:
+            alerts_order_by = "o.created_at"
+        else:
+            alerts_order_by = "o.id"
+
+        # 2. Fetch Recent Alerts
+        cur.execute(f"""
+            SELECT o.*, s.url as site_domain 
+            FROM observed_pages o
+            JOIN sites s ON o.site_id = s.siteid
+            WHERE o.changed = 1
+            ORDER BY {alerts_order_by} DESC
+            LIMIT 200
+        """)
+        alerts = cur.fetchall()
+
+        # 3. Fetch Sites Overview
+        cur.execute("""
+            SELECT s.siteid, s.url, 
+                   (SELECT COUNT(*) FROM crawl_pages cp WHERE cp.siteid = s.siteid) as page_count,
+                   (SELECT COUNT(*) FROM observed_pages op WHERE op.site_id = s.siteid AND op.changed = 1) as alert_count
+            FROM sites_PROD s
+        """)
+        sites = cur.fetchall()
+
+        cur.close()
+        conn.close()
+
+    except Exception as e:
+        print(f"Error fetching data for report: {e}")
+        return
+
+    # 4. HTML Template
+    html_template = f"""
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Crawler | Security Report</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {{
+            --accent-blue: #38bdf8;
+            --accent-red: #ef4444;
+            --accent-green: #22c55e;
+            --accent-yellow: #eab308;
+            --accent-orange: #f97316;
+            --critical-red: #991b1b;
+        }}
+
+        [data-theme='dark'] {{
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+            --glass: rgba(30, 41, 59, 0.7);
+            --border: rgba(255,255,255,0.1);
+            --border-dim: rgba(255,255,255,0.05);
+            --table-hover: rgba(255,255,255,0.02);
+            --stat-hover: rgba(56, 189, 248, 0.1);
+        }}
+
+        [data-theme='light'] {{
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #0f172a;
+            --text-dim: #64748b;
+            --glass: rgba(255, 255, 255, 0.7);
+            --border: rgba(0,0,0,0.1);
+            --border-dim: rgba(0,0,0,0.05);
+            --table-hover: rgba(0,0,0,0.02);
+            --stat-hover: rgba(56, 189, 248, 0.05);
+        }}
+
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 20px;
+            transition: background 0.3s, color 0.3s;
+        }}
+
+        .container {{ max-width: 1200px; margin: 0 auto; }}
+
+        /* Header */
+        header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 40px;
+            padding: 20px;
+            background: var(--glass);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            transition: background 0.3s, border 0.3s;
+        }}
+
+        .logo-section {{ display: flex; align-items: center; gap: 20px; }}
+        .logo {{ font-size: 24px; font-weight: 700; color: var(--accent-blue); }}
+        
+        .header-actions {{ display: flex; align-items: center; gap: 15px; }}
+        .btn-theme {{ 
+            background: var(--border); 
+            color: var(--text-main); 
+            border: none;
+            padding: 10px; 
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }}
+        .btn-theme:hover {{ transform: scale(1.1); background: var(--border-dim); }}
+        
+        /* Icons */
+        .sun-icon {{ display: none; }}
+        [data-theme='light'] .moon-icon {{ display: none; }}
+        [data-theme='light'] .sun-icon {{ display: block; }}
+
+        .timestamp {{ color: var(--text-dim); font-size: 14px; text-align: right; }}
+
+        /* Stats Grid */
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }}
+
+        .stat-card {{
+            background: var(--card-bg);
+            padding: 24px;
+            border-radius: 16px;
+            border: 1px solid var(--border-dim);
+            transition: transform 0.2s, border-color 0.2s;
+        }}
+        .stat-card:hover {{ transform: translateY(-5px); border-color: var(--accent-blue); background: var(--stat-hover); }}
+        .stat-label {{ color: var(--text-dim); font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }}
+        .stat-value {{ font-size: 32px; font-weight: 700; margin-top: 8px; }}
+        .stat-value.alerts {{ color: var(--accent-red); }}
+
+        /* Sections */
+        .section-title {{ font-size: 20px; font-weight: 600; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }}
+        .section-title::before {{ content: ''; width: 4px; height: 24px; background: var(--accent-blue); border-radius: 2px; }}
+
+        /* Table Style */
+        .table-container {{
+            background: var(--card-bg);
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid var(--border-dim);
+            margin-bottom: 40px;
+        }}
+
+        table {{ width: 100%; border-collapse: collapse; text-align: left; }}
+        th {{ 
+            background: var(--border-dim); 
+            color: var(--text-dim); 
+            padding: 12px 16px; 
+            font-weight: 600; 
+            font-size: 11px; 
+            text-transform: uppercase; 
+            border-bottom: 2px solid var(--border-dim);
+        }}
+        
+        .sort-select {{
+            background: transparent;
+            color: var(--accent-blue);
+            border: 1px solid rgba(56, 189, 248, 0.2);
+            border-radius: 4px;
+            font-size: 10px;
+            padding: 2px;
+            margin-left: 5px;
+            cursor: pointer;
+            outline: none;
+        }}
+        .sort-select:hover {{ border-color: var(--accent-blue); }}
+        .sort-select option {{ background: var(--card-bg); color: var(--text-main); }}
+
+        td {{ padding: 14px 16px; border-top: 1px solid var(--border-dim); font-size: 13px; }}
+        
+        tr:hover td {{ background: var(--table-hover); }}
+
+        .badge {{
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }}
+        .badge-none {{ background: rgba(34, 197, 94, 0.2); color: var(--accent-green); }}
+        .badge-low {{ background: rgba(234, 179, 8, 0.2); color: var(--accent-yellow); }}
+        .badge-medium, .badge-med {{ background: rgba(249, 115, 22, 0.2); color: var(--accent-orange); }}
+        .badge-high {{ background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }}
+        .badge-critical {{ background: rgba(153, 27, 27, 0.2); color: var(--critical-red); }}
+
+        .btn-view {{
+            color: var(--accent-blue);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 13px;
+        }}
+        .btn-view:hover {{ text-decoration: underline; }}
+
+        /* Glossary */
+        .glossary {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            background: rgba(255,255,255,0.02);
+            padding: 20px;
+            border-radius: 16px;
+            margin-bottom: 40px;
+            border: 1px dashed rgba(255,255,255,0.1);
+        }}
+        .glossary-item b {{ color: var(--accent-blue); display: block; margin-bottom: 4px; }}
+        .glossary-item p {{ font-size: 12px; color: var(--text-dim); }}
+
+        .empty-state {{ padding: 40px; text-align: center; color: var(--text-dim); }}
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo-section">
+                <div class="logo">Crawler <span style="font-weight: 300; color: var(--text-dim);">| Audit</span></div>
+                <button onclick="toggleTheme()" class="btn-theme" title="Toggle Light/Dark Mode">
+                    <span class="moon-icon">🌙</span>
+                    <span class="sun-icon">☀️</span>
+                </button>
+            </div>
+            <div class="timestamp">
+                <div>Last Updated</div>
+                <div style="color:var(--text-main); font-weight:600">{(datetime.now() + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M:%S")} IST</div>
+            </div>
+        </header>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Sites</div>
+                <div class="stat-value">{total_enabled_sites}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Baselines</div>
+                <div class="stat-value">{total_baselines}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Pages</div>
+                <div class="stat-value">{total_pages_crawled}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Critical Alerts</div>
+                <div class="stat-value alerts">{total_alerts}</div>
+            </div>
+        </div>
+
+        <div class="section-title">Severity Glossary</div>
+        <div class="glossary">
+            <div class="glossary-item">
+                <span class="badge badge-low">LOW</span>
+                <p>Minor meta-tag or layout shifts (< 5%). Likely noise or tracking nonces.</p>
+            </div>
+            <div class="glossary-item">
+                <span class="badge badge-medium">MEDIUM</span>
+                <p>Partial content changes (5-20%). Text updates or layout alterations.</p>
+            </div>
+            <div class="glossary-item">
+                <span class="badge badge-high">HIGH</span>
+                <p>Major content modification (20-50%). Sections missing or swapped.</p>
+            </div>
+            <div class="glossary-item">
+                <span class="badge badge-critical">CRITICAL</span>
+                <p>Complete data loss or structure change (> 50%). Highly suspicious.</p>
+            </div>
+        </div>
+
+        <div class="section-title">Detection Alerts (Most Recent 200)</div>
+        <p style="margin-bottom:10px; font-size:12px; color:var(--text-dim)">Use dropdowns to sort columns. Row IDs allow easy counting.</p>
+        <div class="table-container">
+            <table id="alertsTable">
+                <thead>
+                    <tr>
+                        <th>##</th>
+                        <th>
+                            Site ID 
+                            <select class="sort-select" onchange="sortTable(1, this.value)">
+                                <option value="">Sort</option>
+                                <option value="asc">↑ Asc</option>
+                                <option value="desc">↓ Desc</option>
+                            </select>
+                        </th>
+                        <th>
+                            Target URL
+                            <select class="sort-select" onchange="sortTable(2, this.value)">
+                                <option value="">Sort</option>
+                                <option value="asc">A-Z</option>
+                                <option value="desc">Z-A</option>
+                            </select>
+                        </th>
+                        <th>
+                            Score
+                            <select class="sort-select" onchange="sortTable(3, this.value)">
+                                <option value="">Sort</option>
+                                <option value="asc">Lowest</option>
+                                <option value="desc">Highest</option>
+                            </select>
+                        </th>
+                        <th>
+                            Severity
+                            <select class="sort-select" onchange="sortTable(4, this.value)">
+                                <option value="">Sort</option>
+                                <option value="asc">Min</option>
+                                <option value="desc">Max</option>
+                            </select>
+                        </th>
+                        <th>
+                            Detected At
+                            <select class="sort-select" onchange="sortTable(5, this.value)">
+                                <option value="">Sort</option>
+                                <option value="asc">Oldest</option>
+                                <option value="desc">Newest</option>
+                            </select>
+                        </th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join([f'''
+                    <tr>
+                        <td><b style="color:var(--text-dim)">{i+1}</b></td>
+                        <td>{a['site_id']}</td>
+                        <td style="word-break: break-all; max-width: 400px;">{a['site_domain']}/{a['normalized_url']}</td>
+                        <td><strong>{a['defacement_score']}%</strong></td>
+                        <td><span class="badge badge-{a['defacement_severity'].lower()}">{a['defacement_severity']}</span></td>
+                        <td class="timestamp">{(a['checked_at'] + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M")}</td>
+                        <td><a href="../{a['diff_path']}" target="_blank" class="btn-view">View Evidence</a></td>
+                    </tr>
+                    ''' for i, a in enumerate(alerts)]) if alerts else '<tr><td colspan="7" class="empty-state">No changes detected in recent runs.</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section-title">Domain Coverage</div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Site ID</th>
+                        <th>Domain</th>
+                        <th>Pages Crawled</th>
+                        <th>Active Alerts</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join([f'''
+                    <tr>
+                        <td>{s['siteid']}</td>
+                        <td>{s['url']}</td>
+                        <td>{s['page_count']}</td>
+                        <td><span style="color: {'var(--accent-red)' if s['alert_count'] > 0 else 'var(--text-dim)'}">{s['alert_count']}</span></td>
+                    </tr>
+                    ''' for s in sites])}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        function toggleTheme() {{
+            const html = document.documentElement;
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('crawler-theme', newTheme);
+        }}
+
+        // Initialize theme on load
+        (function() {{
+            const savedTheme = localStorage.getItem('crawler-theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+        }})();
+
+        function sortTable(n, dir) {{
+            if (!dir) return;
+            var table, rows, switching, i, x, y, shouldSwitch, switchcount = 0;
+            table = document.getElementById("alertsTable");
+            switching = true;
+            
+            const selects = document.querySelectorAll('.sort-select');
+            selects.forEach((s, idx) => {{
+                if (idx !== n-1) s.value = "";
+            }});
+
+            while (switching) {{
+                switching = false;
+                rows = table.rows;
+                for (i = 1; i < (rows.length - 1); i++) {{
+                    shouldSwitch = false;
+                    x = rows[i].getElementsByTagName("TD")[n];
+                    y = rows[i + 1].getElementsByTagName("TD")[n];
+                    
+                    let xVal = x.innerHTML.toLowerCase();
+                    let yVal = y.innerHTML.toLowerCase();
+                    
+                    if (n === 1 || n === 3) {{
+                        xVal = parseFloat(xVal.replace(/[^0-9.]/g, '')) || 0;
+                        yVal = parseFloat(yVal.replace(/[^0-9.]/g, '')) || 0;
+                    }}
+
+                    if (dir === "asc") {{
+                        if (xVal > yVal) {{ shouldSwitch = true; break; }}
+                    }} else if (dir === "desc") {{
+                        if (xVal < yVal) {{ shouldSwitch = true; break; }}
+                    }}
+                }}
+                if (shouldSwitch) {{
+                    rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+                    switching = true;
+                    switchcount ++;
+                }} 
+            }}
+        }}
+    </script>
+</body>
+</html>
+"""
+
+    with open(latest_path, "w", encoding="utf-8") as f:
+        f.write(html_template)
+
+    print(f"Updated Latest: {latest_path}")
+
+if __name__ == "__main__":
+    generate_report()
