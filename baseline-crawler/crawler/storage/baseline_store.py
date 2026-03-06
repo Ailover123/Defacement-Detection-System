@@ -63,7 +63,8 @@ def save_baseline(*, custid, siteid, url, html, enforce_www=False):
     # 🔒 Canonical for DB (Respecting site preference)
     canonical = LinkUtility.get_canonical_id(url, enforce_www=enforce_www)
 
-    content_hash = ContentNormalizer.semantic_hash(html)
+    normalized = ContentNormalizer.normalize_html(html)
+    content_hash = ContentNormalizer.semantic_hash(normalized)
 
     site_dir = BASELINE_ROOT / str(custid) / str(siteid)
     site_dir.mkdir(parents=True, exist_ok=True)
@@ -105,9 +106,9 @@ def save_baseline(*, custid, siteid, url, html, enforce_www=False):
     )
 
     # --------------------------------------------------
-    # 3️⃣ Always overwrite file
+    # 3️⃣ Always overwrite file (save normalized so compare reads the same format)
     # --------------------------------------------------
-    path.write_text(html.strip(), encoding="utf-8")
+    path.write_text(normalized, encoding="utf-8")
 
     # --------------------------------------------------
     # 4️⃣ Ensure defacement_sites stores canonical only
