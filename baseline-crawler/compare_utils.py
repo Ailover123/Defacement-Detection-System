@@ -49,6 +49,23 @@ IGNORED_ATTR_PATTERNS = {
     "data-zs-src",
     "data-zs-src2",
 
+    # Dynamic ARIA / accessibility (JS-injected state)
+    "aria-expanded", "aria-haspopup", "aria-hidden",
+    "aria-label", "aria-roledescription", "aria-live",
+    "aria-atomic", "aria-relevant", "aria-busy",
+    "tabindex", "role",
+
+    # Swiper / slider runtime attributes
+    "data-swiper-slide-index",
+
+    # SmartMenus empty runtime attr
+    "data-smartmenus-",
+
+    # JS runtime state
+    "inert",
+
+    # Lazy-load placeholder attributes
+    "data-src", "data-srcset", "data-lazy-src", "srcset",
 }
 
 SUFFIX_PATTERNS = {
@@ -65,24 +82,53 @@ IGNORED_TAGS = {
 }
 
 PREFIX_PATTERNS = {
-    "data-aos", "data-wow", "data-framer", "data-scroll", "aria-hidden"
-    #slider and carousel 
-     "slider-",
+    "data-aos", "data-wow", "data-framer", "data-scroll",
+    # slider and carousel 
+    "slider-",
     "carousel-",
     "owl-",
     "rev_slider_",
     "like_sc_",
- # WP / page builders
+    # WP / page builders
     "vc_custom_",
     "js-view-dom-id-",
     "ltx-sr-id-",
     "zoom-",
+    # Swiper runtime
+    "data-swiper-",
+}
+
+# CSS classes dynamically injected by JS (menu plugins, sliders, etc.)
+# These are stripped from class lists during noise-stripping normalization.
+DYNAMIC_CLASSES = {
+    # Swiper runtime clones & state
+    "swiper-slide-duplicate", "swiper-slide-duplicate-active",
+    "swiper-slide-duplicate-next", "swiper-slide-duplicate-prev",
+    "swiper-slide-active", "swiper-slide-next", "swiper-slide-prev",
+    "swiper-slide-visible",
+    "e-swiper-container", "e-widget-swiper",
+    # SmartMenus / Elementor nav JS state
+    "has-submenu", "sub-arrow",
+    "elementor-active",
+    # WP lazy-load state
+    "lazyloaded", "lazyloading", "ls-is-cached", "lazyload",
+    # Swiper pagination runtime
+    "swiper-pagination-clickable", "swiper-pagination-bullets",
+    "swiper-pagination-horizontal", "swiper-pagination-vertical",
+    # Elementor JS-injected layout
+    "elementor-posts-masonry", "elementor-has-item-ratio",
+    # Swiper runtime init state
+    "swiper-initialized", "swiper-horizontal", "swiper-vertical",
+    "swiper-pointer-events",
 }
 
 IGNORED_STYLE_PROPERTIES = {
     "transition", "transform", "animation", "will-change", "opacity",
     "transition-duration", "transition-delay", "transition-timing-function",
-    "animation-duration", "animation-delay", "animation-iteration-count"
+    "animation-duration", "animation-delay", "animation-iteration-count",
+    # JS-computed positioning & sizing (viewport-dependent)
+    "left", "top", "right", "bottom",
+    "width", "height", "max-width", "max-height", "min-width", "min-height",
 }
 
 # Tags that trigger a score boost if their content changes
@@ -162,6 +208,11 @@ def _html_to_semantic_lines(html: str, strip_noise: bool = True) -> list[str]:
             for match in soup.find_all(tag_name):
                 match.decompose()
 
+        # Unwrap Elementor headline animation spans (character-level wrappers)
+        # These split words like "Keeper" into <span>K</span><span>e</span>...
+        for span in soup.find_all("span", class_=lambda c: c and "elementor-headline-dynamic-letter" in c):
+            span.unwrap()
+
     lines = []
 
     def walk(node, depth=0):
@@ -198,6 +249,22 @@ def _html_to_semantic_lines(html: str, strip_noise: bool = True) -> list[str]:
                 lines.append(text)
 
         elif isinstance(node, Tag):
+            # Skip swiper duplicate slides entirely (JS-generated clones)
+            if strip_noise and node.name == "div":
+                cls_list = node.get("class", [])
+                if isinstance(cls_list, str):
+                    cls_list = cls_list.split()
+                if "swiper-slide-duplicate" in cls_list:
+                    return
+
+            # Skip empty or icon-only <span> tags (JS-injected submenu arrows, etc.)
+            if strip_noise and node.name == "span":
+                if not node.get_text(strip=True):
+                    children = node.find_all(True)
+                    # Empty span OR span containing only <i> icon elements
+                    if not children or all(c.name == "i" for c in children):
+                        return
+
             # normalize attributes (sorted and filtered)
             valid_attrs = {}
             CASE_INSENSITIVE_ATTRS = {"charset", "lang", "type", "method", "rel", "media", "http-equiv"}
@@ -211,6 +278,18 @@ def _html_to_semantic_lines(html: str, strip_noise: bool = True) -> list[str]:
                     v = " ".join(v)
                 
                 v = str(v)
+
+                # Skip data: URI src attributes (lazy-load placeholders)
+                if strip_noise and k == "src" and v.startswith("data:"):
+                    continue
+
+                # Strip dynamic classes from class attribute
+                if strip_noise and k == "class":
+                    classes = v.split()
+                    classes = [c for c in classes if c not in DYNAMIC_CLASSES]
+                    v = " ".join(classes)
+                    if not v:
+                        continue
                 
                 # Special handling for style attribute
                 if k.lower() == "style":
