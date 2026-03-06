@@ -40,7 +40,7 @@ from crawler.storage.db import (
     fail_crawl_job,
     has_site_crawl_data
 )
-from crawler.storage.mysql import fetch_site_info_by_baseline_id, site_has_baselines
+from crawler.storage.mysql import fetch_site_info_by_baseline_id, site_has_baselines, get_defacement_rows_for_site
 from crawler.baseline_worker import BaselineWorker
 from crawler.core import (
     logger,
@@ -439,7 +439,14 @@ def crawl_site(site, args, target_urls=None):
                   return
 
              frontier = Frontier()
-             
+
+             # Auto-target only the monitored URLs from defacement_sites table
+             if not target_urls:
+                  site_rows = get_defacement_rows_for_site(siteid)
+                  if site_rows:
+                       target_urls = ["https://" + row["url"] for row in site_rows]
+                       job_logger.info(f"[COMPARE] Auto-targeting {len(target_urls)} monitored URL(s) from defacement_sites (skipping full site crawl).")
+
              if target_urls:
              # Targeting specific pages only - do not seed the whole site
                   for t_url in target_urls:
@@ -617,6 +624,36 @@ def crawl_site(site, args, target_urls=None):
              summary_lines.append("\n") # This was part of the original last line, now needs to be appended separately
              with SUMMARY_LOCK: job_logger.info("\n".join(summary_lines))
 
+             # ── Per-site defacement summary (COMPARE mode) ────────────────
+             with COMPARE_LOCK:
+                 site_detections = [
+                     r for r in GLOBAL_COMPARE_RESULTS
+                     if r.get("siteid") == siteid and r.get("status") == "CHANGED"
+                 ]
+
+             det_lines = [
+                 "",
+                 "=" * 70,
+                 f"DEFACEMENT SUMMARY — Site {siteid} ({original_site_url})",
+                 "=" * 70,
+             ]
+             if site_detections:
+                 det_lines.append(f"{'BASELINE ID':<25} | {'SCORE':<8} | {'SEVERITY':<10} | URL")
+                 det_lines.append("-" * 70)
+                 for r in sorted(site_detections, key=lambda x: x.get("score", 0), reverse=True):
+                     det_lines.append(
+                         f"{str(r.get('baseline_id','N/A')):<25} | "
+                         f"{r.get('score', 0):.1f}%    | "
+                         f"{str(r.get('severity','N/A')):<10} | "
+                         f"{r.get('url','')}"
+                     )
+                 det_lines.append(f"\nTotal defacements detected: {len(site_detections)}")
+             else:
+                 det_lines.append("No defacements detected for this site.")
+             det_lines.append("=" * 70 + "\n")
+             with SUMMARY_LOCK:
+                 job_logger.warning("\n".join(det_lines)) if site_detections else job_logger.info("\n".join(det_lines))
+
              with GLOBAL_LOCK:
                  GLOBAL_SESSIONS.append(session_entry)
                  GLOBAL_TOTAL_URLS += (total_saved + total_db_existed)
@@ -655,6 +692,7 @@ def main():
     global CRAWL_MODE
     if args.mode:
         CRAWL_MODE = args.mode.upper()
+        os.environ["CRAWL_MODE"] = CRAWL_MODE
         logger.info(f"CRAWL_MODE overridden by CLI: {CRAWL_MODE}")
 
     # Start Watchdog
