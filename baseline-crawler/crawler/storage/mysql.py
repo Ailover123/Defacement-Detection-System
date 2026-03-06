@@ -707,3 +707,24 @@ def get_selected_defacement_rows():
         cur.close()
         conn.close()
         DB_SEMAPHORE.release()
+
+
+def get_defacement_rows_for_site(siteid: int):
+    """Return defacement_sites rows for a specific site marked as 'selected'."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT d.siteid, d.url, d.baseline_id, d.threshold, s.url as base_url
+            FROM defacement_sites d
+            JOIN sites s ON d.siteid = s.siteid
+            WHERE d.action = 'selected' AND d.siteid = %s
+            """,
+            (int(siteid),)
+        )
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+        DB_SEMAPHORE.release()
