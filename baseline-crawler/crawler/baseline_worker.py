@@ -57,6 +57,14 @@ class BaselineWorker:
             if not html_content:
                 return "failed", f"Empty render for site={self.siteid} url={url}", thread_name
 
+            # 🛡️ Reject truncated renders (no <body> = incomplete page)
+            if "<body" not in html_content.lower():
+                # Retry once — the page may not have loaded fully
+                time.sleep(2)
+                html_content, final_url, status_code = BrowserManager.render_sync(fetch_url)
+                if not html_content or "<body" not in html_content.lower():
+                    return "failed", f"Truncated render (no <body>) for site={self.siteid} url={url}", thread_name
+
             # Base tag injection (keep your existing logic)
             # if "<base" not in html_content.lower():
             #     import re
