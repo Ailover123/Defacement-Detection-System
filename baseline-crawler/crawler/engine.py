@@ -272,13 +272,15 @@ class CrawlerWorker(threading.Thread):
                 # FETCH (Rendering enabled with temp file matching Baseline logic)
                 # -------------------------
                 fetch_url = LinkUtility.force_www_url(url)
-                result = PageFetcher.fetch_rendered(fetch_url, siteid=self.siteid, save_to_tmp=True)
-                
+                force_js = self.crawl_mode == "COMPARE"
+                result = PageFetcher.fetch_rendered(fetch_url, siteid=self.siteid, save_to_tmp=True, force_js=force_js)
+                final_url = result.get("final_url", url)
+                html = result.get("html", "")
+
                 if result.get("error") and any(err in str(result["error"]) for err in ("429", "503")):
                     self.failed_throttle_count += 1
-                
-                resp_obj = result.get("response")
-                initial_status = resp_obj.status_code if resp_obj else 0
+
+                initial_status = result.get("status_code", 0)
 
                 # 🛡️ Detect Soft 404
                 if result["success"] and result.get("html"):
@@ -319,28 +321,19 @@ class CrawlerWorker(threading.Thread):
                             "base_url": self.original_site_url
                         })
                     
-                    continue
-
-                resp = result["response"]
-                final_url = result.get("final_url", url)
-                html = result.get("html", "") # fetch_rendered returns html directly
-                if not html and result.get("response"):
-                    html = result["response"].text
 
                 # JS Rendering escalation loop (redundant now but kept for logic consistency)
                 # ...
 
                 # ✅ Synchronize <base> tag injection (Match BaselineWorker format)
-                if "<base" not in html.lower():
-                    # Insert <base> immediately after <head>
-                    html = re.sub(
-                        r"(<head[^>]*>)",
-                        rf'\1<base href="{fetch_url}">',
-                        html,
-                        count=1,
-                        flags=re.IGNORECASE
-                    )
-
+                # if "\u003cbase" not in html_content.lower():
+                #     html_content = re.sub(
+                #         r"(\u003chead[^>]*>)",
+                #         rf'\1\u003cbase href="{fetch_url}"\u003e',
+                #         html_content,
+                #         count=1,
+                #         flags=re.IGNORECASE
+                #     )
                 # ======================================================
                 # MODE: CRAWL (Database Updates)
                 # ======================================================
@@ -354,10 +347,10 @@ class CrawlerWorker(threading.Thread):
                         "url": final_url, # Pass raw URL, mysql.py handles canonicalization
                         "parent_url": LinkUtility.get_canonical_id(discovered_from, self.original_site_url, enforce_www=self.enforce_www) if discovered_from else None,
                         "depth": depth,
-                        "status_code": resp.status_code,
-                        "content_type": resp.headers.get("Content-Type", ""),
-                        "content_length": len(resp.content),
-                        "response_time_ms": result["fetch_time_ms"],
+                        "status_code": result.get("status_code", 0),
+                        "content_type": result.get("content_type", ""),
+                        "content_length": len(html.encode("utf-8")) if html else 0,
+                        "response_time_ms": result.get("fetch_time_ms", 0),
                         "fetched_at": datetime.now(),
                         "base_url": self.original_site_url
                     })
@@ -394,27 +387,41 @@ class CrawlerWorker(threading.Thread):
                                 self.missing_baselines.append(r["url"])
                             
                             # ✅ Always update/sync description in COMPARE mode
-                            insert_crawl_page({
+                            res = insert_crawl_page({
                                 "job_id": self.job_id,
                                 "custid": self.custid,
                                 "siteid": self.siteid,
                                 "url": r["url"],
                                 "parent_url": LinkUtility.get_canonical_id(discovered_from, self.original_site_url, enforce_www=self.enforce_www) if discovered_from else None,
                                 "depth": depth,
-                                "status_code": resp.status_code,
-                                "content_type": resp.headers.get("Content-Type", ""),
-                                "content_length": len(resp.content),
-                                "response_time_ms": result["fetch_time_ms"],
+                                "status_code": result.get("status_code", 0),
+                                "content_type": result.get("content_type", ""),
+                                "content_length": len(html.encode("utf-8")) if html else 0,
+                                "response_time_ms": result.get("fetch_time_ms", 0),
                                 "fetched_at": datetime.now(),
                                 "base_url": self.original_site_url,
                                 "description": desc_val # ✅ Set or Clear
                             })
+
+                            if res and res.get("action") == "Inserted":
+                                self.saved_count += 1
+                                self.log("info", f"DB: Inserted {self._db_url(r['url'])} (ID: {res.get('id')})")
+                            elif res and res.get("action") == "Existed":
+                                self.existed_urls.add(LinkUtility.normalize_url(r["url"], preference_url=self.original_site_url))
                             
                             if r["status"] != "NOT_MONITORED":
                                 self.log(
                                     "warning" if r["status"] == "CHANGED" else "info",
                                     f"[COMPARE] {r['status']} | {r['url']} | Score={r['score']} | Severity={r['severity']}"
                                 )
+
+                            if r["status"] == "CHANGED" and self.compare_results is not None:
+                                with self.compare_lock:
+                                    self.compare_results.append({
+                                        **r,
+                                        "siteid": self.siteid,
+                                        "custid": self.custid,
+                                    })
 
                 # ======================================================
                 # SHARED DISCOVERY (CRAWL and COMPARE)
