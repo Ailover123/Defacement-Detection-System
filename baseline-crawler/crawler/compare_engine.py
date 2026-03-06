@@ -44,6 +44,11 @@ class CompareEngine:
         if not html:
             return []
 
+        # Guard: truncated live render (no <body>) — skip comparison
+        if "<body" not in html.lower():
+            logger.warning(f"[COMPARE] Truncated live HTML (no <body>) for {url}. Skipping comparison.")
+            return []
+
         rows = self._load_rows()
         if not rows:
             return []
@@ -52,9 +57,9 @@ class CompareEngine:
         live_canon = LinkUtility.get_canonical_id(url, base_url, enforce_www=enforce_www)
         logger.info(f"[COMPARE] LIVE CANON: {live_canon}")
 
-        # Normalize LIVE HTML
-        normalized_live = ContentNormalizer.normalize_html(html)
-        observed_hash = ContentNormalizer.semantic_hash(normalized_live)
+        # Unified Hashing — normalize live HTML first, then hash
+        live_normalized = ContentNormalizer.normalize_html(html)
+        observed_hash = ContentNormalizer.semantic_hash(live_normalized)
         logger.info(f"[COMPARE] OBSERVED_HASH: {observed_hash}")
 
         matched = False
@@ -120,14 +125,28 @@ class CompareEngine:
                 })
                 break
 
-            #  Normalize BASELINE HTML
-            old_raw_html = baseline_path.read_text(
+            #  Read BASELINE HTML (stored as normalized)
+            old_normalized = baseline_path.read_text(
                 encoding="utf-8",
                 errors="ignore"
             )
-            normalized_baseline = ContentNormalizer.normalize_html(old_raw_html)
 
-            baseline_hash = ContentNormalizer.semantic_hash(normalized_baseline)
+            # 🛡️ Detect truncated baselines (head-only, no body)
+            if "<body" not in old_normalized.lower():
+                logger.warning(
+                    f"[COMPARE] STALE_BASELINE (no <body>) for baseline_id={baseline_id} url={url}. "
+                    "Re-run BASELINE mode to fix."
+                )
+                results.append({
+                    "baseline_id": baseline_id,
+                    "url": url,
+                    "status": "STALE_BASELINE",
+                    "score": 0,
+                    "severity": "N/A"
+                })
+                break
+
+            baseline_hash = ContentNormalizer.semantic_hash(old_normalized)
             logger.info(f"[COMPARE] BASELINE_HASH: {baseline_hash}")
 
             # =====================================
@@ -145,16 +164,16 @@ class CompareEngine:
                 })
                 break
 
-            print("BASELINE SIZE:", len(old_raw_html))
-            print("LIVE SIZE:", len(html))
+            print("BASELINE SIZE:", len(old_normalized))
+            print("LIVE SIZE:", len(live_normalized))
 
-            # =======   ==============================
+            # =====================================
             # CALCULATE SCORE
             # =====================================
-            
+
             score = self._percentage_fn(
-                normalized_baseline,
-                normalized_live,
+                old_normalized,
+                live_normalized,
                 threshold=threshold
             )
 
@@ -187,8 +206,8 @@ class CompareEngine:
 
             self._diff_fn(
                 url=url,
-                html_a=normalized_baseline,
-                html_b=normalized_live,
+                html_a=old_normalized,
+                html_b=live_normalized,
                 out_dir=diff_dir,
                 file_prefix=prefix,
                 severity=severity,
