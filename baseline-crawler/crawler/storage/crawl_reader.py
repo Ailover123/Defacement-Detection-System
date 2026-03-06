@@ -18,8 +18,8 @@ def iter_crawl_urls(*, siteid: int):
             SELECT DISTINCT url
             FROM crawl_pages
             WHERE siteid = %s
-              AND content_type LIKE 'text/html%%'
-                        ORDER BY url ASC
+              AND (content_type LIKE 'text/html%%' OR content_type = '' OR content_type IS NULL)
+            ORDER BY url ASC
             """,
             (siteid,),
         )
