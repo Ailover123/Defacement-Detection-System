@@ -1,11 +1,11 @@
 """
-FILE DESCRIPTION: Dedicated hub for all headless browser operations and JS rendering logic.
-PRODUCTION STABLE VERSION:
-- 5 persistent workers
-- Fast navigation (commit-based)
-- WordPress-safe DOM stabilization
-- Self-healing crash recovery
-- High performance + no cascade failures
+PRODUCTION STABLE JS ENGINE
+- Multi-stage navigation fallback
+- DOM stabilization
+- Safe content extraction
+- Worker self-healing
+- No networkidle usage
+- Stable for CMS / WordPress / CDN
 """
 
 import threading
@@ -112,7 +112,7 @@ class RenderCache:
 
 
 # ============================================================
-# BROWSER MANAGER
+# RENDER RESULT
 # ============================================================
 
 class RenderResult:
@@ -124,16 +124,20 @@ class RenderResult:
 
 
 # ============================================================
-# BROWSER MANAGER (FAST + STABLE + SAFE)
+# BROWSER MANAGER
 # ============================================================
 
 class BrowserManager:
 
-    _num_workers = 5   
+    _num_workers = 5
     _workers = []
     _queues = []
     _init_lock = threading.Lock()
     _rr_index = 0
+
+    # --------------------------------------------------------
+    # Worker Thread
+    # --------------------------------------------------------
 
     class _Worker(threading.Thread):
 
@@ -168,7 +172,7 @@ class BrowserManager:
                             java_script_enabled=True,
                         )
 
-                        #  Block heavy resources INCLUDING CSS
+                        # Block heavy resources (keep JS)
                         def route_handler(route):
                             if route.request.resource_type in (
                                 "image",
@@ -193,31 +197,65 @@ class BrowserManager:
 
                             try:
                                 status_code = 0
+                                html = ""
 
-                                #  Faster navigation strategy
+                                # ====================================================
+                                # STAGE 1: DOMContentLoaded attempt
+                                # ====================================================
                                 try:
                                     response = page.goto(
                                         url,
                                         wait_until="domcontentloaded",
-                                        timeout=20000,
+                                        timeout=15000,
                                     )
-
                                     if response:
-                                        status_code = response.status  
+                                        status_code = response.status
+                                except:
+                                    response = None
 
+                                # ====================================================
+                                # STAGE 2: Commit fallback if DOM failed
+                                # ====================================================
+                                if not response:
                                     try:
-                                        page.wait_for_load_state("load", timeout=5000)
-                                    except:
-                                        pass
+                                        response = page.goto(
+                                            url,
+                                            wait_until="commit",
+                                            timeout=15000,
+                                        )
+                                        if response:
+                                            status_code = response.status
+                                    except Exception as e:
+                                        logger.warning(
+                                            f"[JS-ENGINE] Navigation fallback failed for {url}: {e}"
+                                        )
 
+                                # ====================================================
+                                # STAGE 3: Stabilization
+                                # ====================================================
+                                try:
+                                    page.wait_for_load_state("load", timeout=5000)
+                                except:
+                                    pass
+
+                                try:
+                                    page.wait_for_function(
+                                        "document.readyState === 'complete'",
+                                        timeout=5000
+                                    )
+                                except:
+                                    pass
+
+                                page.wait_for_timeout(500)
+
+                                # ====================================================
+                                # STAGE 4: Safe content extraction
+                                # ====================================================
+                                try:
+                                    html = page.content()
+                                except:
                                     page.wait_for_timeout(400)
                                     html = page.content()
-
-                                except Exception as e:
-                                    logger.warning(
-                                        f"[JS-ENGINE] Navigation failed for {url}: {e}"
-                                    )
-                                    html = ""
 
                                 result_q.put(
                                     RenderResult(
@@ -238,7 +276,6 @@ class BrowserManager:
                                     f"[JS-ENGINE] Worker-{self.wid} page error: {e}"
                                 )
 
-                                # Soft page recovery
                                 try:
                                     page.close()
                                 except:
@@ -246,7 +283,7 @@ class BrowserManager:
 
                                 try:
                                     page = context.new_page()
-                                except Exception:
+                                except:
                                     raise
 
                                 result_q.put(RenderResult(error=e))
@@ -306,8 +343,9 @@ class BrowserManager:
 
         return result.content, result.final_url, result.status_code
 
+
 # ============================================================
-# JS RENDER WORKER (External API)
+# JS RENDER WORKER
 # ============================================================
 
 class JSRenderWorker(threading.Thread):
@@ -331,7 +369,7 @@ class JSRenderWorker(threading.Thread):
                 event["done"].set()
                 self.queue.task_done()
 
-    def render(self, url: str, timeout: int = 30):
+    def render(self, url: str, timeout: int = 35):
         event = {
             "done": threading.Event(),
             "html": None,
