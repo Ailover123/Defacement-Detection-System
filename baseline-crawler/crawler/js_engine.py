@@ -197,6 +197,7 @@ class BrowserManager:
                                 user_agent=USER_AGENT,
                                 viewport={"width": 1280, "height": 900},
                                 java_script_enabled=True,
+                                ignore_https_errors=True,
                             )
                             ctx.route("**/*", route_handler)
                             return ctx, ctx.new_page()

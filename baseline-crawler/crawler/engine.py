@@ -84,15 +84,22 @@ class ExecutionPolicy:
 
     @staticmethod
     def is_allowed_domain(seed_url: str, candidate_url: str, current_url: str = None) -> bool:
-        s_netloc = urlparse(seed_url).netloc.lower().split(":")[0]
-        c_netloc = urlparse(candidate_url).netloc.lower().split(":")[0]
+        # 🔒 Robust scheme handling for urlparse
+        temp_seed = seed_url if "://" in seed_url else "https://" + seed_url
+        temp_cand = candidate_url if "://" in candidate_url else "https://" + candidate_url
+        
+        s_netloc = urlparse(temp_seed).netloc.lower().split(":")[0]
+        c_netloc = urlparse(temp_cand).netloc.lower().split(":")[0]
+        
         if s_netloc == c_netloc: return True
         if current_url:
-            curr_netloc = urlparse(current_url).netloc.lower().split(":")[0]
+            temp_curr = current_url if "://" in current_url else "https://" + current_url
+            curr_netloc = urlparse(temp_curr).netloc.lower().split(":")[0]
             if curr_netloc == c_netloc: return True
+            
         s_base = s_netloc[4:] if s_netloc.startswith("www.") else s_netloc
         c_base = c_netloc[4:] if c_netloc.startswith("www.") else c_netloc
-        return s_base == c_base
+        return s_base == c_base and s_base != ""
 
 
 # === FRONTIER MANAGEMENT ===
