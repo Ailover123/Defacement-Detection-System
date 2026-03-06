@@ -31,7 +31,7 @@ class FlushingFileHandler(logging.FileHandler):
 from report_generator import generate_report
 
 from crawler.engine import Frontier, CrawlerWorker, ExecutionPolicy
-from crawler.processor import LinkUtility, TrafficControl
+from crawler.processor import LinkUtility, TrafficControl, PageFetcher
 from crawler.storage.db import (
     check_db_health,
     fetch_enabled_sites,
@@ -42,6 +42,7 @@ from crawler.storage.db import (
 )
 from crawler.storage.mysql import fetch_site_info_by_baseline_id, site_has_baselines, get_defacement_rows_for_site
 from crawler.baseline_worker import BaselineWorker
+from crawler.js_engine import BrowserManager
 from crawler.core import (
     logger,
     MIN_WORKERS,
@@ -174,11 +175,30 @@ def crawl_site(site, args, target_urls=None):
         start_time = time.time()
 
         # ====================================================
+        # WAF IP BYPASS SETUP (applies to all modes)
+        # ====================================================
+        def _configure_waf_bypass(the_url):
+            """Configure both Playwright and HTTP fetching to use WAF IP."""
+            _waf_ip = site.get("waf_ip")
+            if _waf_ip:
+                from urllib.parse import urlparse as _p
+                _domain = _p(the_url if "://" in the_url else "https://" + the_url).netloc
+                job_logger.info(f"[BYPASS] WAF IP for site {siteid}: {_waf_ip} -> {_domain}")
+                BrowserManager.configure(_domain, _waf_ip)
+                PageFetcher.configure(_domain, _waf_ip)
+            else:
+                job_logger.info(f"[BYPASS] No WAF IP for site {siteid}. Standard routing.")
+                BrowserManager.configure(None, None)
+                PageFetcher.configure(None, None)
+
+        # ====================================================
         # BASELINE MODE (REFETCH FROM DB)
         # ====================================================
         if CRAWL_MODE == "BASELINE":
             job_logger.info(f"[MODE] BASELINE (offline refetch from DB for siteid={siteid})")
-            
+            _configure_waf_bypass(start_url)
+            waf_ip = site.get("waf_ip")
+
             # Since BaselineWorker currently hardcodes max_workers=5
             worker_count = MAX_WORKERS
             logger.info(f"Worker-X : started (BASELINE) x{worker_count}")
@@ -194,6 +214,7 @@ def crawl_site(site, args, target_urls=None):
                 siteid=siteid,
                 seed_url=start_url,
                 target_urls=target_urls,
+                waf_ip=waf_ip,
                 heartbeat_callback=update_heartbeat
             ).run()
 
@@ -236,6 +257,7 @@ def crawl_site(site, args, target_urls=None):
         # ====================================================
         if CRAWL_MODE == "CRAWL":
             job_logger.info(f"[MODE] CRAWL (live discovery for siteid={siteid})")
+            _configure_waf_bypass(start_url)
 
             # 🛡️ Capture initial state for "NEW LINK FOUND" logic
             initial_has_data = has_site_crawl_data(siteid, start_url)
@@ -428,6 +450,7 @@ def crawl_site(site, args, target_urls=None):
                   job_logger.warning(f"Site {siteid} has no existing baselines. Proceeding with crawl to identify and mark missing baselines.")
              
              job_logger.info(f"[MODE] COMPARE (live discovery + diff for siteid={siteid})")
+             _configure_waf_bypass(start_url)
 
              # 🛡️ Capture initial state for "NEW LINK FOUND" logic
              initial_has_data = has_site_crawl_data(siteid, start_url)

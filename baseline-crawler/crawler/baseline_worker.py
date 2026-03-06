@@ -130,13 +130,12 @@ class BaselineWorker:
         # If the main site is down, we skip everything to avoid 100s of retries.
         logger.info(f"[BASELINE] Health Checking Seed URL: {self.seed_url}")
         
-        # We perform a single fetch with standard retries. 
+        # We perform a smart fetch (HTTP + Playwright fallback). 
         # If this fails, we assume the site is down/blocking us completely.
-        start_url = LinkUtility.force_www_url(self.seed_url)
-        health_check = PageFetcher.fetch(start_url, siteid=self.siteid)
+        health_check = PageFetcher.fetch_rendered(self.seed_url, siteid=self.siteid)
         
         if not health_check["success"]:
-            error_msg = f"Parent site inaccessible: {health_check.get('error')}"
+            error_msg = f"Parent site inaccessible (Smart Hook Failed): {health_check.get('error') or 'Unknown error'}"
             logger.error(f"[BASELINE] 🛑 ABORTING SITE {self.siteid}: {error_msg}")
             
             # Consume iterator and mark all as failed

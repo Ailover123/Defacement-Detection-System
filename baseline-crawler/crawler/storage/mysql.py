@@ -204,7 +204,16 @@ def fetch_enabled_sites():
                 s.url,
                 w.https_ip as waf_ip
             FROM sites s
-            LEFT JOIN waf_policy_data w ON s.siteid = w.siteid
+            LEFT JOIN waf_policy_data w 
+                ON w.sitename = TRIM(LEADING 'www.' FROM 
+                    TRIM(LEADING 'https://' FROM 
+                        TRIM(LEADING 'http://' FROM 
+                            TRIM(LEADING 'https://www.' FROM 
+                                TRIM(LEADING 'http://www.' FROM LOWER(TRIM(s.url)))
+                            )
+                        )
+                    )
+                )
         """)
         return cur.fetchall()
     finally:

@@ -176,6 +176,7 @@ class BrowserManager:
                             user_agent=USER_AGENT,
                             viewport={"width": 1280, "height": 900},
                             java_script_enabled=True,
+                            ignore_https_errors=True,
                         )
 
                         # Block heavy resources (keep JS)
@@ -295,10 +296,23 @@ class BrowserManager:
                                     page.wait_for_timeout(400)
                                     html = page.content()
 
+                                # 🛡️ Reject internal browser error/blank pages
+                                # chrome-error://chromewebdata/ = page failed to load
+                                # about:blank (non-reset) = nothing loaded
+                                final_page_url = page.url
+                                _bad_schemes = ("chrome-error://", "chrome://")
+                                if any(final_page_url.startswith(s) for s in _bad_schemes):
+                                    logger.warning(
+                                        f"[JS-ENGINE] Rejected internal browser page: {final_page_url}"
+                                    )
+                                    html = ""
+                                    status_code = 0
+                                    final_page_url = url  # restore original URL
+
                                 result_q.put(
                                     RenderResult(
                                         html,
-                                        page.url,
+                                        final_page_url,
                                         status_code,
                                     )
                                 )

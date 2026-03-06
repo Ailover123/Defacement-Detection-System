@@ -237,44 +237,116 @@ class PageFetcher:
 
     TIMEOUT = 15
 
+    # Class-level WAF bypass state (set via configure())
+    _current_waf_ip = None
+    _current_primary_host = None
+
+    @classmethod
+    def configure(cls, domain, waf_ip):
+        """
+        Set the WAF bypass IP for HTTP fetching.
+        When set, HTTP requests route to the IP directly with a Host header.
+        Pass None to disable bypass.
+        """
+        cls._current_waf_ip = waf_ip if waf_ip else None
+        cls._current_primary_host = domain if domain else None
+        if waf_ip:
+            logger.info(f"[FETCH] HTTP bypass configured: {domain} -> {waf_ip}")
+        else:
+            logger.info("[FETCH] HTTP bypass disabled (standard routing).")
+
     @staticmethod
     def fetch(url: str, siteid=None):
         """
-        FAST HTTP fetch.
-        Used before deciding if JS rendering is required.
+        FAST HTTPS-first fetch.
+        If PageFetcher._current_waf_ip is set and the URL matches the primary host,
+        routes via WAF IP directly (IP as URL host + Host header).
+        Handles redirects manually to maintain WAF IP routing.
         """
+        from urllib.parse import urlparse, urlunparse, urljoin
+        
+        waf_ip = PageFetcher._current_waf_ip
+        primary_host = PageFetcher._current_primary_host
+        
+        current_url = url
+        max_redirects = 10
+        redirect_count = 0
+        
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
 
         try:
+            while redirect_count < max_redirects:
+                fetch_url = current_url
+                original_netloc = None
+                
+                parsed = urlparse(current_url)
+                if waf_ip and primary_host:
+                    url_host = parsed.netloc.lower().replace("www.", "")
+                    target_host = primary_host.lower().replace("www.", "")
+                    if url_host == target_host:
+                        # Replace host with WAF IP, keep domain in Host header
+                        ip_url = urlunparse(parsed._replace(netloc=waf_ip))
+                        fetch_url = ip_url
+                        headers["Host"] = parsed.netloc
+                        original_netloc = parsed.netloc
 
-            headers = {
-                "User-Agent": USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml",
-            }
+                response = requests.get(
+                    fetch_url,
+                    headers=headers,
+                    timeout=PageFetcher.TIMEOUT,
+                    allow_redirects=False,  # 🛡️ Manual control
+                    verify=False,
+                )
 
-            response = requests.get(
-                url,
-                headers=headers,
-                timeout=PageFetcher.TIMEOUT,
-                allow_redirects=True,
-            )
-
-            return {
-                "success": True,
-                "status_code": response.status_code,
-                "html": response.text or "",
-                "final_url": response.url,
-                "content_type": response.headers.get("Content-Type", ""),
-            }
-
-        except Exception as e:
-
-            logger.warning(f"[FETCH] HTTP fetch failed for {url}: {e}")
+                # Check for redirect
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get("Location")
+                    if not location:
+                        break
+                    
+                    # Resolve relative redirects
+                    next_url = urljoin(current_url, location)
+                    if next_url == current_url: # Infinite loop protection
+                        break
+                        
+                    current_url = next_url
+                    redirect_count += 1
+                    continue
+                else:
+                    # Not a redirect, we're done
+                    # Restore final_url if we used IP
+                    final_url = response.url
+                    if original_netloc:
+                        resp_parsed = urlparse(response.url)
+                        final_url = urlunparse(resp_parsed._replace(netloc=original_netloc))
+                    
+                    return {
+                        "success": True,
+                        "status_code": response.status_code,
+                        "html": response.text or "",
+                        "final_url": final_url,
+                        "content_type": response.headers.get("Content-Type", ""),
+                    }
 
             return {
                 "success": False,
                 "status_code": 0,
                 "html": "",
-                "final_url": url,
+                "final_url": current_url,
+                "error": f"Max redirects ({max_redirects}) exceeded" if redirect_count >= max_redirects else "Redirect loop detected",
+            }
+
+        except Exception as e:
+            logger.warning(f"[FETCH] HTTP fetch failed for {url}: {e}")
+            return {
+                "success": False,
+                "status_code": 0,
+                "html": "",
+                "final_url": current_url,
                 "error": str(e),
             }
 
@@ -306,13 +378,14 @@ class PageFetcher:
             logger.info(f"[FETCH] HTTP failed → using JS render: {url}")
 
             try:
-
-                html, final_url, status = BrowserManager.render_sync(url)
+                _wip = PageFetcher._current_waf_ip
+                _ph = PageFetcher._current_primary_host
+                html, final_url, status = BrowserManager.render_sync(url, waf_ip=_wip, primary_host=_ph)
                 # Retry once if truncated (no <body>)
                 if html and "<body" not in html.lower():
                     logger.warning(f"[FETCH] Truncated JS render (no <body>), retrying: {url}")
                     time.sleep(2)
-                    html, final_url, status = BrowserManager.render_sync(url)
+                    html, final_url, status = BrowserManager.render_sync(url, waf_ip=_wip, primary_host=_ph)
                 return {
                     "success": True,
                     "html": html,
@@ -343,14 +416,15 @@ class PageFetcher:
             logger.info(f"[FETCH] JS rendering required: {url}")
 
             try:
-
-                html, final_url, status = BrowserManager.render_sync(url)
+                _wip = PageFetcher._current_waf_ip
+                _ph = PageFetcher._current_primary_host
+                html, final_url, status = BrowserManager.render_sync(url, waf_ip=_wip, primary_host=_ph)
 
                 # Retry once if truncated (no <body>)
                 if html and "<body" not in html.lower():
                     logger.warning(f"[FETCH] Truncated JS render (no <body>), retrying: {url}")
                     time.sleep(2)
-                    html, final_url, status = BrowserManager.render_sync(url)
+                    html, final_url, status = BrowserManager.render_sync(url, waf_ip=_wip, primary_host=_ph)
 
                 return {
                     "success": True,
