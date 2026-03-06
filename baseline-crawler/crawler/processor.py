@@ -14,6 +14,7 @@ import re
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urlunparse, urljoin, quote, unquote
 from playwright.sync_api import sync_playwright
+import compare_utils
 from crawler.core import USER_AGENT, REQUEST_TIMEOUT, DATA_DIR, JS_GOTO_TIMEOUT, JS_WAIT_TIMEOUT, JS_STABILITY_TIME, logger
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -227,167 +228,168 @@ class TrafficControl:
 
 # === PAGE FETCHER ===
 
+import requests
+from crawler.js_engine import BrowserManager, JSIntelligence
+from crawler.core import USER_AGENT, logger
+
+
 class PageFetcher:
-    """
-    FLOW: Checks for active domain pauses -> Executes HTTP request with browser-like headers -> 
-    Handles 429 retries with exponential backoff -> Returns structured response or error details.
-    """
-    @staticmethod
-    def fetch(url, siteid=None, referer=None):
-        if siteid:
-            remaining = TrafficControl.get_remaining_pause(siteid)
-            if remaining > 0:
-                logger.info(f"[THROTTLE] Pre-fetch pause active for site {siteid}. Waiting {remaining:.1f}s...")
-                time.sleep(remaining)
 
-        max_retries = 2
-        retry_delay = 5
-        headers = {
-            "User-Agent": USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Cache-Control": "max-age=0",
-        }
-        if referer:
-            headers["Referer"] = referer
-
-        for attempt in range(max_retries + 1):
-            if siteid and attempt > 0:
-                remaining = TrafficControl.get_remaining_pause(siteid)
-                if remaining > 0:
-                    time.sleep(remaining)
-
-            start_time = time.time()
-            try:
-                r = requests.get(url, timeout=REQUEST_TIMEOUT, headers=headers, verify=False, allow_redirects=True)
-                fetch_time_ms = int((time.time() - start_time) * 1000)
-                content_type = r.headers.get("Content-Type", "").lower()
-
-                if r.status_code == 429 or r.status_code == 503:
-                    TrafficControl.set_pause(siteid, 5, url=url)
-                    if attempt < max_retries:
-                        logger.warning(f"[RETRY {attempt+1}/{max_retries}] {r.status_code} Error for {url}. Waiting locally for {retry_delay}s...")
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                        logger.info(f"Retrying {url} now (Attempt {attempt+1}/{max_retries+1})...")
-                        continue
-                    else:
-                        logger.error(f"{r.status_code} Error persisted for {url} after {max_retries} retries. Final 5s pause.")
-                        time.sleep(5)
-
-                if 200 <= r.status_code < 300:
-                    success = "text/html" in content_type or "application/json" in content_type
-                    return {
-                        "success": success,
-                        "response": r,
-                        "final_url": r.url,
-                        "fetch_time_ms": fetch_time_ms,
-                        "response_size": len(r.content),
-                        "content_type": content_type,
-                        "error": None if success else f"ignored content type: {content_type}"
-                    }
-                elif r.status_code == 307:
-                    # 🛡️ Sucuri / anti-bot challenge often uses 307 with JS instead of Location header
-                    return {
-                        "success": False, "error": f"http error: {r.status_code}",
-                        "response": r, "final_url": r.url,
-                        "content_type": content_type, "fetch_time_ms": fetch_time_ms,
-                        "html": r.text if "text/html" in content_type else "",
-                    }
-                else:
-                    return {
-                        "success": False, "error": f"http error: {r.status_code}",
-                        "response": r, "final_url": r.url,
-                        "content_type": content_type, "fetch_time_ms": fetch_time_ms,
-                        "html": r.text if "text/html" in content_type else "",
-                    }
-            except requests.exceptions.TooManyRedirects as e:
-                # Capture the "Real" status of the last hop if available
-                last_status = 0
-                if hasattr(e, 'response') and e.response is not None:
-                    last_status = e.response.status_code
-                return {
-                    "success": False, "error": "Too many redirects", 
-                    "status_code": last_status, "final_url": url,
-                    "content_type": "", "fetch_time_ms": int((time.time() - start_time) * 1000)
-                }
-            except Exception as e:
-                if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)) and attempt < max_retries:
-                    err_type = "Timeout" if isinstance(e, requests.exceptions.Timeout) else "Connection Error"
-                    logger.warning(f"[RETRY {attempt+1}/{max_retries}] {err_type} for {url}: {e}. Waiting {retry_delay}s...")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                    logger.info(f"Retrying {url} now (Attempt {attempt+1}/{max_retries+1})...")
-                    continue
-                
-                # Base case for all other networking/connection failures
-                return {
-                    "success": False, "error": str(e), 
-                    "status_code": 0, "final_url": url,
-                    "content_type": "", "fetch_time_ms": int((time.time() - start_time) * 1000)
-                }
+    TIMEOUT = 15
 
     @staticmethod
-    def fetch_rendered(url, siteid=None, save_to_tmp=False):
+    def fetch(url: str, siteid=None):
         """
-        Optimized Playwright fetcher.
-        Uses a shared browser context and blocks heavy resources for speed.
+        FAST HTTP fetch.
+        Used before deciding if JS rendering is required.
         """
-        from crawler.js_engine import BrowserManager
-        start_time = time.time()
+
         try:
-            # We use a custom render call that supports resource blocking
-            # Or we just use BrowserManager.render_sync and ensure it's optimized.
-            html, final_url, status_code = BrowserManager.render_sync(url)
-            fetch_time_ms = int((time.time() - start_time) * 1000)
 
-            if 200 <= status_code <= 299:
-                # Save to temp if requested (User snippet logic)
-                if save_to_tmp and siteid:
-                    try:
-                        tmp_dir = DATA_DIR / "tmp"
-                        tmp_dir.mkdir(parents=True, exist_ok=True)
-                        filepath = tmp_dir / f"{siteid}.html"
-                        filepath.write_text(html, encoding="utf-8")
-                    except Exception as e:
-                        logger.error(f"[PageFetcher] Failed to save tmp file: {e}")
+            headers = {
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml",
+            }
+
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=PageFetcher.TIMEOUT,
+                allow_redirects=True,
+            )
+
+            return {
+                "success": True,
+                "status_code": response.status_code,
+                "html": response.text or "",
+                "final_url": response.url,
+                "content_type": response.headers.get("Content-Type", ""),
+            }
+
+        except Exception as e:
+
+            logger.warning(f"[FETCH] HTTP fetch failed for {url}: {e}")
+
+            return {
+                "success": False,
+                "status_code": 0,
+                "html": "",
+                "final_url": url,
+                "error": str(e),
+            }
+
+    # ------------------------------------------------------------
+    # SMART FETCH (HTTP + OPTIONAL JS)
+    # ------------------------------------------------------------
+
+    @staticmethod
+    def fetch_rendered(url: str, siteid=None, save_to_tmp=False, force_js=False):
+        """
+        Smart fetch pipeline:
+
+        1. HTTP fetch (fast)
+        2. Detect if JS rendering is required
+        3. Use Playwright only when necessary
+        """
+
+        start = time.time()
+        http_result = PageFetcher.fetch(url, siteid)
+
+        html = http_result.get("html", "")
+
+        # ------------------------------------------------------
+        # If HTTP failed → fallback to JS rendering
+        # ------------------------------------------------------
+
+        if not http_result["success"]:
+
+            logger.info(f"[FETCH] HTTP failed → using JS render: {url}")
+
+            try:
+
+                html, final_url, status = BrowserManager.render_sync(url)
+                # Retry once if truncated (no <body>)
+                if html and "<body" not in html.lower():
+                    logger.warning(f"[FETCH] Truncated JS render (no <body>), retrying: {url}")
+                    time.sleep(2)
+                    html, final_url, status = BrowserManager.render_sync(url)
+                return {
+                    "success": True,
+                    "html": html,
+                    "status_code": status,
+                    "final_url": final_url,
+                    "content_type": "text/html",
+                    "fetch_time_ms": int((time.time() - start) * 1000),
+                }
+
+            except Exception as e:
+
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "html": "",
+                    "status_code": 0,
+                    "final_url": url,
+                    "content_type": "",
+                    "fetch_time_ms": int((time.time() - start) * 1000),
+                }
+
+        # ------------------------------------------------------
+        # Check if page requires JS rendering
+        # ------------------------------------------------------
+
+        if force_js or JSIntelligence.needs_js_rendering(html):
+
+            logger.info(f"[FETCH] JS rendering required: {url}")
+
+            try:
+
+                html, final_url, status = BrowserManager.render_sync(url)
+
+                # Retry once if truncated (no <body>)
+                if html and "<body" not in html.lower():
+                    logger.warning(f"[FETCH] Truncated JS render (no <body>), retrying: {url}")
+                    time.sleep(2)
+                    html, final_url, status = BrowserManager.render_sync(url)
 
                 return {
                     "success": True,
                     "html": html,
-                    "status_code": status_code,
+                    "status_code": status,
                     "final_url": final_url,
-                    "fetch_time_ms": fetch_time_ms,
                     "content_type": "text/html",
-                    "response": type('obj', (object,), {
-                        'status_code': status_code,
-                        'text': html,
-                        'content': html.encode(),
-                        'url': final_url,
-                        'headers': {'Content-Type': 'text/html'}
-                    })
+                    "fetch_time_ms": int((time.time() - start) * 1000),
                 }
-            else:
+
+            except Exception as e:
+
+                logger.warning(f"[FETCH] JS render failed for {url}: {e}")
+
                 return {
                     "success": False,
-                    "status_code": status_code,
-                    "error": f"HTTP {status_code}",
-                    "fetch_time_ms": fetch_time_ms
+                    "error": str(e),
+                    "html": "",
+                    "status_code": 0,
+                    "final_url": url,
+                    "content_type": "",
+                    "fetch_time_ms": int((time.time() - start) * 1000),
                 }
-        except Exception as e:
-            logger.error(f"[Optimized Playwright Error] {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "status_code": 0,
-                "fetch_time_ms": int((time.time() - start_time) * 1000)
-            }
+
+        # ------------------------------------------------------
+        # No JS needed → return HTTP HTML
+        # ------------------------------------------------------
+
+        logger.debug(f"[FETCH] Using HTTP HTML (no JS needed): {url}")
+
+        return {
+            "success": True,
+            "html": html,
+            "status_code": http_result["status_code"],
+            "final_url": http_result["final_url"],
+            "content_type": http_result.get("content_type", ""),
+            "fetch_time_ms": int((time.time() - start) * 1000),
+        }
+
 # === LINK EXTRACTOR ===
 
 class LinkExtractor:
@@ -506,34 +508,6 @@ class ContentNormalizer:
         return "\n".join(line.strip() for line in normalized.splitlines() if line.strip())
 
     @staticmethod
-    def _html_to_semantic_lines(html: str) -> list[str]:
-        """Convert HTML into whitespace-stable, semantic lines."""
-        soup = BeautifulSoup(html or "", "lxml")
-        lines: list[str] = []
-
-        def walk(node, depth: int = 0) -> None:
-            indent = "  " * depth
-            from bs4 import NavigableString, Tag
-            if isinstance(node, NavigableString):
-                text = " ".join(str(node).split())
-                if text: lines.append(indent + text)
-                return
-            if isinstance(node, Tag):
-                attrs = " ".join(
-                    f'{key}="{ " ".join(value) if isinstance(value, list) else value }"'
-                    for key, value in sorted(node.attrs.items())
-                )
-                lines.append(indent + f"<{node.name}{(' ' + attrs) if attrs else ''}>")
-                for child in node.children: walk(child, depth + 1)
-                lines.append(indent + f"</{node.name}>")
-
-        for child in soup.contents: walk(child)
-        return lines
-
-    @staticmethod
     def semantic_hash(html: str) -> str:
-        """Return a SHA256 fingerprint of the semantic HTML content."""
-        lines = ContentNormalizer._html_to_semantic_lines(html)
-        payload = "\n".join(lines)
-        import hashlib
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        """Return a SHA256 fingerprint of the semantic HTML content using unified rules."""
+        return compare_utils.semantic_hash(html)
