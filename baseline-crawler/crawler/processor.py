@@ -325,6 +325,10 @@ class PageFetcher:
                     next_url = urljoin(current_url, location)
                     if next_url == current_url: # Infinite loop protection
                         break
+
+                    # 🔒 Always upgrade HTTP redirects to HTTPS
+                    if next_url.startswith("http://"):
+                        next_url = "https://" + next_url[7:]
                         
                     current_url = next_url
                     redirect_count += 1
@@ -336,13 +340,17 @@ class PageFetcher:
                     if original_netloc:
                         resp_parsed = urlparse(response.url)
                         final_url = urlunparse(resp_parsed._replace(netloc=original_netloc))
-                    
+
+                    # 🚫 Treat 4xx/5xx HTTP responses as failures
+                    # (previously hardcoded success=True for ALL status codes)
+                    is_success = response.status_code < 400
                     return {
-                        "success": True,
+                        "success": is_success,
                         "status_code": response.status_code,
-                        "html": response.text or "",
+                        "html": response.text or "" if is_success else "",
                         "final_url": final_url,
                         "content_type": response.headers.get("Content-Type", ""),
+                        "error": f"http error: {response.status_code}" if not is_success else None,
                     }
 
             return {
@@ -391,8 +399,18 @@ class PageFetcher:
         # ------------------------------------------------------
 
         if not http_result["success"]:
+            http_status = http_result.get("status_code", 0)
 
-            logger.info(f"[FETCH] HTTP failed → using JS render: {url}")
+            # 🚫 Real HTTP error (4xx/5xx): no point retrying with JS — page genuinely doesn't exist
+            if http_status >= 400:
+                logger.info(f"[FETCH] HTTP {http_status} → skipping JS render (real error): {url}")
+                return {
+                    **http_result,
+                    "fetch_time_ms": int((time.time() - start) * 1000),
+                }
+
+            # 🔄 Connection-level failure (timeout, SSL, DNS) → fallback to JS render
+            logger.info(f"[FETCH] HTTP connection failed → using JS render: {url}")
 
             try:
                 _wip = PageFetcher._current_waf_ip

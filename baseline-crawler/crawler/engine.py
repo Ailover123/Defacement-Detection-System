@@ -328,7 +328,7 @@ class CrawlerWorker(threading.Thread):
                             "base_url": self.original_site_url
                         })
 
-                    # Do not run compare/discovery flow for failed fetches.
+                    # 🚫 Skip remaining processing (DB insert, link extraction) for failed URLs
                     continue
                     
 
