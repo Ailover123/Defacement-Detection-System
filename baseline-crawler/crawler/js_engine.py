@@ -198,6 +198,7 @@ class BrowserManager:
                             try:
                                 status_code = 0
                                 html = ""
+                                nav_error = None
 
                                 # ====================================================
                                 # STAGE 1: DOMContentLoaded attempt
@@ -210,7 +211,8 @@ class BrowserManager:
                                     )
                                     if response:
                                         status_code = response.status
-                                except:
+                                except Exception as e:
+                                    nav_error = e
                                     response = None
 
                                 # ====================================================
@@ -226,9 +228,23 @@ class BrowserManager:
                                         if response:
                                             status_code = response.status
                                     except Exception as e:
+                                        nav_error = e
                                         logger.warning(
                                             f"[JS-ENGINE] Navigation fallback failed for {url}: {e}"
                                         )
+
+                                # If navigation never produced a response, treat it as a hard failure.
+                                if not response:
+                                    raise RuntimeError(
+                                        f"Navigation failed for {url}: {nav_error or 'no response from browser'}"
+                                    )
+
+                                # Browser error pages must not be processed as crawlable HTML.
+                                final_url = page.url or ""
+                                if final_url.lower().startswith("chrome-error://"):
+                                    raise RuntimeError(
+                                        f"Browser error page returned for {url}: {final_url}"
+                                    )
 
                                 # ====================================================
                                 # STAGE 3: Stabilization
@@ -260,7 +276,7 @@ class BrowserManager:
                                 result_q.put(
                                     RenderResult(
                                         html,
-                                        page.url,
+                                        final_url,
                                         status_code,
                                     )
                                 )
