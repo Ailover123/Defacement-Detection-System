@@ -238,6 +238,19 @@ class PageFetcher:
     TIMEOUT = 15
 
     @staticmethod
+    def _is_invalid_render_result(final_url: str, html: str) -> bool:
+        final = (final_url or "").lower()
+        body = (html or "").lower()
+
+        if final.startswith("chrome-error://") or final.startswith("devtools://"):
+            return True
+
+        if "chrome-error://chromewebdata" in body or "net::err_" in body:
+            return True
+
+        return False
+
+    @staticmethod
     def fetch(url: str, siteid=None):
         """
         FAST HTTP fetch.
@@ -313,6 +326,20 @@ class PageFetcher:
                     logger.warning(f"[FETCH] Truncated JS render (no <body>), retrying: {url}")
                     time.sleep(2)
                     html, final_url, status = BrowserManager.render_sync(url)
+
+                if PageFetcher._is_invalid_render_result(final_url, html):
+                    err = f"Invalid JS render result for {url}: final_url={final_url}"
+                    logger.warning(f"[FETCH] {err}")
+                    return {
+                        "success": False,
+                        "error": err,
+                        "html": "",
+                        "status_code": 0,
+                        "final_url": url,
+                        "content_type": "",
+                        "fetch_time_ms": int((time.time() - start) * 1000),
+                    }
+
                 return {
                     "success": True,
                     "html": html,
@@ -351,6 +378,19 @@ class PageFetcher:
                     logger.warning(f"[FETCH] Truncated JS render (no <body>), retrying: {url}")
                     time.sleep(2)
                     html, final_url, status = BrowserManager.render_sync(url)
+
+                if PageFetcher._is_invalid_render_result(final_url, html):
+                    err = f"Invalid JS render result for {url}: final_url={final_url}"
+                    logger.warning(f"[FETCH] {err}")
+                    return {
+                        "success": False,
+                        "error": err,
+                        "html": "",
+                        "status_code": 0,
+                        "final_url": url,
+                        "content_type": "",
+                        "fetch_time_ms": int((time.time() - start) * 1000),
+                    }
 
                 return {
                     "success": True,
