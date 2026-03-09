@@ -320,6 +320,9 @@ class CrawlerWorker(threading.Thread):
                             "fetched_at": datetime.now(),
                             "base_url": self.original_site_url
                         })
+
+                    # Do not run compare/discovery flow for failed fetches.
+                    continue
                     
 
                 # JS Rendering escalation loop (redundant now but kept for logic consistency)
