@@ -2,7 +2,7 @@ from pathlib import Path
 from datetime import datetime
 from crawler.processor import LinkUtility, ContentNormalizer
 from crawler.storage.baseline_reader import get_baseline_hash
-from crawler.storage.mysql import insert_observed_page, get_selected_defacement_rows
+from crawler.storage.mysql import insert_observed_page, get_selected_defacement_rows, fetch_observed_page
 from crawler.core import logger
 
 DIFF_ROOT = Path("diffs")
@@ -60,7 +60,6 @@ class CompareEngine:
         # Unified Hashing — normalize live HTML first, then hash
         live_normalized = ContentNormalizer.normalize_html(html)
         observed_hash = ContentNormalizer.semantic_hash(live_normalized)
-        logger.info(f"[COMPARE] OBSERVED_HASH: {observed_hash}")
 
         matched = False
         results = []
@@ -96,6 +95,7 @@ class CompareEngine:
             threshold_val = row.get("threshold")
             threshold = float(threshold_val) if threshold_val is not None else self.DEFAULT_THRESHOLD
 
+            
             baseline = get_baseline_hash(
                 site_id=siteid,
                 normalized_url=row_canon
@@ -147,7 +147,21 @@ class CompareEngine:
                 break
 
             baseline_hash = ContentNormalizer.semantic_hash(old_normalized)
-            logger.info(f"[COMPARE] BASELINE_HASH: {baseline_hash}")
+            previous_observed = fetch_observed_page(siteid, row_canon)
+            previous_observed_hash = (
+                previous_observed.get("observed_hash") if previous_observed else None
+            )
+            logger.info(
+                "[COMPARE] HASH_PAIR siteid=%s canon=%s\n"
+                "[COMPARE] BASELINE_HASH: %s\n"
+                "[COMPARE] OBSERVED_HASH: %s\n"
+                "[COMPARE] PREV_OBSERVED_HASH: %s",
+                siteid,
+                row_canon,
+                baseline_hash,
+                observed_hash,
+                previous_observed_hash or "None",
+            )
 
             # =====================================
             # HASH COMPARISON (CLEAN + STABLE)
@@ -161,6 +175,21 @@ class CompareEngine:
                     "status": "UNCHANGED",
                     "score": 0,
                     "severity": "N/A"
+                })
+                break
+
+            if previous_observed_hash and observed_hash == previous_observed_hash:
+                logger.info(
+                    "[COMPARE] ALREADY_DETECTED siteid=%s canon=%s (observed hash matches previous defacement)",
+                    siteid,
+                    row_canon,
+                )
+                results.append({
+                    "baseline_id": baseline_id,
+                    "url": url,
+                    "status": "ALREADY_DETECTED",
+                    "score": previous_observed.get("defacement_score") or 0,
+                    "severity": previous_observed.get("defacement_severity") or "N/A",
                 })
                 break
 
