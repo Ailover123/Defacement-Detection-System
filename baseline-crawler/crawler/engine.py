@@ -191,7 +191,7 @@ class CrawlerWorker(threading.Thread):
     SKIP_REPORT = defaultdict(lambda: {"count": 0, "urls": []})
     SKIP_LOCK = threading.Lock()
 
-    def __init__(self, frontier, name, custid, siteid_map, job_id, crawl_mode, seed_url, original_site_url=None, skip_report=None, skip_lock=None, target_urls=None, compare_results=None, compare_lock=None):
+    def __init__(self, frontier, name, custid, siteid_map, job_id, crawl_mode, seed_url, original_site_url=None, skip_report=None, skip_lock=None, target_urls=None, compare_results=None, compare_lock=None, waf_ip=None):
         super().__init__(name=name)
         self.frontier = frontier
         self.running = True
@@ -201,6 +201,7 @@ class CrawlerWorker(threading.Thread):
         self.crawl_mode = crawl_mode
         self.seed_url = seed_url
         self.original_site_url = original_site_url
+        self.waf_ip = waf_ip  # Per-site WAF IP — used in failure logs to show routing context
         self.skip_report = skip_report if skip_report is not None else defaultdict(lambda: {"count": 0, "urls": []})
         self.skip_lock = skip_lock if skip_lock is not None else threading.Lock()
         self.target_urls = target_urls
@@ -278,11 +279,17 @@ class CrawlerWorker(threading.Thread):
                 # -------------------------
                 # FETCH (Rendering enabled with temp file matching Baseline logic)
                 # -------------------------
-                fetch_url = LinkUtility.force_www_url(url)
+                # ✅ Smart Preference: Follow the seed URL's subdomain style (naked vs www)
+                fetch_url = LinkUtility.normalize_url(url, preference_url=self.seed_url)
+                
                 force_js = self.crawl_mode == "COMPARE"
                 result = PageFetcher.fetch_rendered(fetch_url, siteid=self.siteid, save_to_tmp=True, force_js=force_js)
-                final_url = result.get("final_url", url)
+                final_url = result.get("final_url", fetch_url)
                 html = result.get("html", "")
+
+                # 📝 Log Client-Side Redirects (JS or Meta)
+                if LinkUtility.normalize_url(final_url) != LinkUtility.normalize_url(fetch_url):
+                    self.log("info", f"[REDIRECT] Client-side: {fetch_url} -> {final_url}")
 
                 if result.get("error") and any(err in str(result["error"]) for err in ("429", "503")):
                     self.failed_throttle_count += 1
@@ -296,6 +303,11 @@ class CrawlerWorker(threading.Thread):
                         result["success"] = False
                         initial_status = 404
 
+                # 🛡️ Reject chromewebdata / empty renders (ONLY for CRAWL mode)
+                if self.crawl_mode == "CRAWL" and (not html or result.get("status_code") == 0):
+                    self.log("warning", f"CRAWL: Skipping insertion/processing for empty/failed render: {url}")
+                    continue
+
                 if not result["success"]:
                     reason = result.get("error", "Unknown Fetch Error")
                     if "ignored content type" in str(reason):
@@ -304,7 +316,20 @@ class CrawlerWorker(threading.Thread):
                     self.failed_count += 1
                     if initial_status == 404: reason = "http error: 404"
                     self.failure_reasons[reason] += 1
-                    self.log("error", f"Fetch failed for {url}: {reason}")
+                    if self.waf_ip:
+                        waf_is_hostname = any(c.isalpha() for c in self.waf_ip)
+                        if waf_is_hostname:
+                            import socket
+                            try:
+                                resolved = socket.gethostbyname(self.waf_ip)
+                                _routing = f"via {self.waf_ip} → {resolved}"
+                            except Exception:
+                                _routing = f"via {self.waf_ip} (DNS unresolved)"
+                        else:
+                            _routing = f"via {self.waf_ip}"
+                    else:
+                        _routing = "direct (no WAF IP)"
+                    self.log("error", f"Fetch failed for {url}: {reason} [{_routing}]")
                     
                     # ✅ Sync fail status to DB in COMPARE mode as requested
                     if self.crawl_mode == "COMPARE":

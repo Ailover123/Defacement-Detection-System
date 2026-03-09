@@ -173,14 +173,23 @@ class BrowserManager:
                         )
 
                         # Block heavy resources (keep JS)
+                        # ⚠️ MUST be exception-safe: when a page times out, Playwright
+                        # cancels in-flight route tasks. Without try/except here,
+                        # asyncio.CancelledError prints noisy tracebacks to stderr.
                         def route_handler(route):
-                            if route.request.resource_type in (
-                                "image",
-                                "font",
-                                "media",
-                            ):
-                                return route.abort()
-                            return route.continue_()
+                            try:
+                                if route.request.resource_type in (
+                                    "image",
+                                    "font",
+                                    "media",
+                                ):
+                                    return route.abort()
+                                return route.continue_()
+                            except BaseException:
+                                # Page was closed or context was torn down mid-route.
+                                # asyncio.CancelledError is a BaseException (not Exception) in
+                                # Python 3.8+ — must use BaseException to catch it here.
+                                pass
 
                         def is_page_crash_error(err: Exception) -> bool:
                             msg = str(err).lower()
@@ -438,6 +447,18 @@ class BrowserManager:
                 return # No change
             
             logger.info(f"[BYPASS] Using Chromium Native Host Mapping (SNI Fix) for {domain} -> {waf_ip}")
+            # If WAF IP is a hostname (not a raw IP), resolve it so we know which server Chromium hits.
+            # Chromium's --host-rules does this DNS lookup at runtime — we mirror it here for visibility.
+            if waf_ip and any(c.isalpha() for c in waf_ip):
+                import socket
+                try:
+                    resolved_ip = socket.gethostbyname(waf_ip)
+                    logger.info(
+                        f"[BYPASS] Hostname WAF IP '{waf_ip}' resolved to {resolved_ip} "
+                        f"— Chromium will connect to this IP with SNI={domain}"
+                    )
+                except Exception as dns_err:
+                    logger.warning(f"[BYPASS] Could not resolve hostname WAF IP '{waf_ip}': {dns_err}")
             cls._current_domain = domain
             cls._current_host_rule = new_rule
             

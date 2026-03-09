@@ -288,7 +288,8 @@ def crawl_site(site, args, target_urls=None):
                         crawl_mode="CRAWL", seed_url=start_url, 
                         original_site_url=original_site_url,
                         skip_report=site_skip_report, skip_lock=site_skip_lock,
-                        target_urls=target_urls
+                        target_urls=target_urls,
+                        waf_ip=site.get("waf_ip")
                     )
                     w.start()
                     workers.append(w)
@@ -320,7 +321,8 @@ def crawl_site(site, args, target_urls=None):
                                 crawl_mode="CRAWL", seed_url=start_url, 
                                 original_site_url=original_site_url,
                                 skip_report=site_skip_report, skip_lock=site_skip_lock,
-                                target_urls=target_urls
+                                target_urls=target_urls,
+                                waf_ip=site.get("waf_ip")
                             )
                             w.start()
                             workers.append(w)
@@ -535,6 +537,7 @@ def crawl_site(site, args, target_urls=None):
                                  skip_report=site_skip_report, skip_lock=site_skip_lock,
                                  target_urls=target_urls,
                                  compare_results=GLOBAL_COMPARE_RESULTS, compare_lock=COMPARE_LOCK,
+                                 waf_ip=site.get("waf_ip")
                              )
                              w.start()
                              workers.append(w)

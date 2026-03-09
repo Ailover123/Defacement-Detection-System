@@ -34,7 +34,7 @@ MIN_WORKERS = int(os.getenv("MIN_WORKERS", 5))
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", 5))
 MAX_PARALLEL_SITES = int(os.getenv("MAX_PARALLEL_SITES", 3))
 CRAWL_DELAY = 0.1  # Seconds between requests per worker to avoid 429s
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+USER_AGENT = "Chrome/126.0.0.0"
 
 # Playwright / JS Rendering Waiting Periods (seconds)
 JS_GOTO_TIMEOUT = 25

@@ -143,42 +143,13 @@ class LinkUtility:
     @staticmethod
     def force_www_url(url: str) -> str:
         """
-        Fetch-only helper.
-        Forces https:// scheme and adds www prefix ONLY for naked domains.
-        Does NOT affect DB canonicalization.
+        [LEGACY] Fetch-only helper. 
+        Previously forced https:// scheme and added www prefix.
+        NOW DISABLED: Returns original URL with https to avoid redirect loops.
         """
-        if not url:
-            return ""
-
-        # Normalize scheme to https
-        if "://" not in url:
-            url = "https://" + url
-            
-        parsed = urlparse(url)
-        # Always force https as requested
-        scheme = "https"
-        netloc = parsed.netloc.lower()
-
-        try:
-            ext = tldextract.extract(url)
-            # Only add www. if it is a naked domain (no subdomain)
-            if not ext.subdomain:
-                new_netloc = f"www.{netloc}"
-            else:
-                # Keep existing subdomain (www, admin, etc.)
-                new_netloc = netloc
-        except Exception:
-            # Fallback to simple logic if tldextract fails
-            new_netloc = netloc if netloc.startswith("www.") else f"www.{netloc}"
-
-        return urlunparse((
-            scheme,
-            new_netloc,
-            parsed.path,
-            parsed.params,
-            parsed.query,
-            parsed.fragment,
-        ))
+        if not url: return ""
+        if "://" not in url: url = "https://" + url
+        return url
 
 
 # === TRAFFIC CONTROL ===
@@ -251,7 +222,7 @@ class PageFetcher:
         cls._current_waf_ip = waf_ip if waf_ip else None
         cls._current_primary_host = domain if domain else None
         if waf_ip:
-            logger.info(f"[FETCH] HTTP bypass configured: {domain} -> {waf_ip}")
+            logger.info(f"[FETCH] HTTPS bypass configured: {domain} -> {waf_ip}")
         else:
             logger.info("[FETCH] HTTP bypass disabled (standard routing).")
 
@@ -325,6 +296,8 @@ class PageFetcher:
                     next_url = urljoin(current_url, location)
                     if next_url == current_url: # Infinite loop protection
                         break
+
+                    logger.info(f"[FETCH] Redirect {response.status_code}: {current_url} -> {next_url}")
 
                     # 🔒 Always upgrade HTTP redirects to HTTPS
                     if next_url.startswith("http://"):
@@ -401,13 +374,29 @@ class PageFetcher:
         if not http_result["success"]:
             http_status = http_result.get("status_code", 0)
 
-            # 🚫 Real HTTP error (4xx/5xx): no point retrying with JS — page genuinely doesn't exist
-            if http_status >= 400:
+            # 🚫 Real HTTP error (4xx/5xx): no point retrying with JS — page genuinely doesn't exist.
+            # ⚠️ EXCEPTION: When WAF IP is a HOSTNAME (e.g. shops.myshopify.com, not a real IP),
+            # the HTTP bypass routes via that hostname as URL host → SNI mismatch at TLS level →
+            # the remote server (e.g. Shopify) returns 403 as a routing artifact, NOT a real 403.
+            # Playwright's --host-rules does DNS-level mapping (preserves original SNI) and works.
+            # So: if WAF IP is set AND it looks like a hostname (has letters, not just digits/dots),
+            # treat a 403 as a routing failure and fall through to Playwright.
+            waf_ip_active = bool(PageFetcher._current_waf_ip)
+            waf_ip_is_hostname = waf_ip_active and not all(
+                c.isdigit() or c == "." for c in (PageFetcher._current_waf_ip or "")
+            )
+            if http_status >= 400 and not (http_status == 403 and waf_ip_is_hostname):
                 logger.info(f"[FETCH] HTTP {http_status} → skipping JS render (real error): {url}")
                 return {
                     **http_result,
                     "fetch_time_ms": int((time.time() - start) * 1000),
                 }
+
+            if http_status == 403 and waf_ip_is_hostname:
+                logger.info(
+                    f"[FETCH] HTTP 403 via hostname WAF IP ({PageFetcher._current_waf_ip}) "
+                    f"— likely SNI mismatch, not real 403. Falling back to Playwright: {url}"
+                )
 
             # 🔄 Connection-level failure (timeout, SSL, DNS) → fallback to JS render
             logger.info(f"[FETCH] HTTP connection failed → using JS render: {url}")
