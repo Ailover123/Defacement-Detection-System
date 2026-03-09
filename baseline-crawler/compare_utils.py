@@ -78,7 +78,7 @@ SUFFIX_PATTERNS = {
 
 
 IGNORED_TAGS = {
-    "base", "meta", "link",# Frequently changes environment-to-environment or is injected
+    "base", "meta", "link", "script", "style", "iframe", # Frequently changes contextually or injected
 }
 
 PREFIX_PATTERNS = {
