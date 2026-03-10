@@ -1,158 +1,197 @@
 # Web Crawler Engineering Specification: CRAWL Mode
 
-This document serves as the **definitive technical reference** for the Web Crawler's `CRAWL` mode. It provides an exhaustive breakdown of the system's architecture, logic, and failure-handling mechanisms.
+This document is the **Absolute Definitive Authoritative Guide** to the Web Crawler's `CRAWL` mode. It provides a strictly additive, exhaustive technical breakdown of every system layer, from socket-level routing to high-level orchestration.
 
 ---
 
-## 1. Requirements & Dependency Specification
-The system is built on a specialized stack designed for high-concurrency scraping and WAF bypass.
+## 1. System Module Directory
+An exhaustive inventory of the codebase, detailing the technical purpose and logic of every major component.
 
-| Library | Role | Technical implementation Context |
+### 1.1 Orchestration Layer
+- **`main.py`**: The central orchestrator.
+  - **Classes**: `FlushingFileHandler` (Ensures atomic log commits to disk during fatal crashes).
+  - **Functions**:
+    - `main()`: Entry point. Handles `argparse`, environment synchronization, and `ThreadPoolExecutor` batching.
+    - `resolve_seed_url()`: Technical variation-prober. Attempts `https://domain.com` and `https://www.domain.com` variations to find the primary responding target.
+    - `test_waf_connectivity()`: Performs a TCP handshake (port 443) on WAF IPs to prevent the crawler from hanging on dead/zombie origin IPs.
+    - `watchdog_thread()`: System safety daemon. Forcefully executes `os._exit(1)` if `LAST_ACTIVITY_TIME` exceeds 900s.
+    - `crawl_site()`: The per-domain context manager. Initializes the `Frontier`, handles per-site log files, and spawns the `CrawlerWorker` pool.
+
+### 1.2 Configuration & Foundations
+- **`crawler/core.py`**: Foundational configuration.
+  - **Classes**: `CompanyFormatter` (Standardizes log headers for corporate audit).
+  - **Functions**: `setup_logger()` (Initializes global parent logger with parallel-safe handlers).
+  - **Constants**: Maps `.env` constraints to runtime logic (`MIN_WORKERS`, `MAX_WORKERS`, `MAX_PARALLEL_SITES`).
+
+### 1.3 Execution Logic
+- **`crawler/engine.py`**: Manages the discovery lifecycle.
+  - **Classes**:
+    - `ExecutionPolicy`: Defines static regex-based skip rules (Tags, Assets, Pagination).
+    - `Frontier`: Thread-safe work coordinator managing the `Queue` and `visited`/`in_progress` sets.
+    - `CrawlerWorker`: The primary executor thread implementing the `fetch-render-persist-extract` cycle.
+
+### 1.4 Content Processing
+- **`crawler/processor.py`**: Network and parsing infrastructure.
+  - **Classes**:
+    - `LinkUtility`: URL sanitization, **Canonical ID** generation, and **Origin Locking**.
+    - `TrafficControl`: implements **Domain-Wide Pause** triggered by `429` errors.
+    - `PageFetcher`: Managed HTTP/HTTPS requests with manual redirect and WAF bypass logic.
+    - `LinkExtractor`: Scrapes DOM for new links and filters them via `ExecutionPolicy`.
+
+### 1.5 Render Escalation
+- **`crawler/js_engine.py`**:
+  - **Classes**: `BrowserManager` (Playwright wrapper), `JSIntelligence` (SPA detection).
+
+### 1.6 Storage & Persistence
+- **`crawler/storage/mysql.py`**: Low-level connection pooling and semaphore acquisition.
+- **`crawler/storage/db.py`**: Semantic data operations (`insert_crawl_page`, `fetch_enabled_sites`).
+- **`crawler/storage/db_guard.py`**: Global `DB_SEMAPHORE` definition.
+
+---
+
+## 2. Requirements & Dependency Spec
+Extensive breakdown of third-party libraries and their role in `CRAWL` mode.
+
+| Library | Role | Technical Implementation & Interaction |
 | :--- | :--- | :--- |
-| `requests` | **Network Core** | Implements synchronous HTTPS fetching. Utilizes `urllib3` for connection pooling. Configured with `verify=False` and `allow_redirects=False` for manual hop control. |
-| `playwright`| **DOM Rendering** | Manages headless Chromium. Used for SPAs or when WAF routing artifacts (403/401) trigger an escalation. |
-| `beautifulsoup4`| **Parsing Engine**| Extracts anchor and asset tags using the `lxml` speed-optimized tree builder. |
-| `mysql-connector`| **Persistence** | Manages the thread-safe `MySQLConnectionPool`. |
-| `tldextract` | **Boundary Lock** | Extracts the `registered_domain` to prevent "domain drift" during redirects. |
-| `python-dotenv` | **Orchestration** | Loads environmental variables from `.env` to synchronize scaling and DB limits. |
-| `brotli` | **Decompression** | Enables decoding of modern response headers (Cloudflare/Brotli). |
+| `requests` | **Network Core** | Executes synchronous HTTPS fetching. Utilizes `urllib3` for connection pooling. Handles manual 3xx hops to maintain WAF routing. |
+| `playwright`| **DOM Rendering** | Spawns Chromium logic. Used for SPAs or when standard HTTPS probes hit WAF routing errors. |
+| `beautifulsoup4`| **Parsing** | Uses the `lxml` engine for high-speed HTML tree building and tag extraction. |
+| `mysql-connector`| **Persistence** | Implements the `MySQLConnectionPool`. Coordinates with `DB_SEMAPHORE` for thread-safe access. |
+| `tldextract` | **Boundary Lock** | Extracts the `registered_domain` to prevent "domain drift" even after redirects. |
+| `python-dotenv` | **Orchestration** | Synchronizes system scaling (`MAX_WORKERS`) with database connection limits. |
+| `psutil` | **Telemetry** | Monitors system memory and CPU usage during large batch runs. |
+| `brotli` | **Decompression** | Essential for decoding high-compression headers from Cloudflare/Akamai WAFs. |
 
 ---
 
-## 2. Configuration & CLI Infrastructure
+## 3. Configuration & CLI Infrastructure
 
-### 2.1 Environmental Variables (`.env`)
-| Variable | Code Usage | Impact on System |
+### 3.1 Environmental Variables (`.env`)
+- `MYSQL_POOL_SIZE`: Directly determines the `DB_SEMAPHORE` token count.
+- `MIN_WORKERS` / `MAX_WORKERS`: Controls the lower/upper bounds of threads per domain.
+- `MAX_PARALLEL_SITES`: Number of concurrent domains allowed in `ThreadPoolExecutor`.
+
+### 3.2 CLI Argument Infrastructure
+| Argument | Technical Use Case | Code Impact |
 | :--- | :--- | :--- |
-| `MYSQL_POOL_SIZE` | `mysql.py`, `db_guard.py` | Sets the maximum concurrent DB connections and `DB_SEMAPHORE` limit. |
-| `MIN_WORKERS` | `main.py`, `core.py` | The base number of threads spawned per site. |
-| `MAX_WORKERS` | `main.py`, `core.py` | The ceiling for dynamic scaling in `CRAWL` mode. |
-| `MAX_PARALLEL_SITES`| `main.py`, `core.py` | Limits the number of sites processed concurrently in `ThreadPoolExecutor`. |
-| `CRAWL_MODE` | `main.py` | Sets default behavior (CRAWL, BASELINE, COMPARE). |
+| `--siteid` | Target specific DB records. | Filters the `sites` list to specific Primary Keys. |
+| `--custid` | Customer-level orchestration. | Filters `sites` to all domains associated with the ID. |
+| `--log` | Session auditing. | Attaches `FlushingFileHandler` to record session to disk. |
+| `--mode` | Engine behavior override. | Cascades to `CrawlerWorker` (CRAWL, BASELINE, COMPARE). |
+| `--parallel` | High-concurrency mode. | Enables `ThreadPoolExecutor` in `main.py`. |
 
-### 2.2 CLI Argument Flow
-Arguments in `main.py` are mapped to internal parameters:
-- `--mode`: Overrides `CRAWL_MODE`. Cascades to `CrawlerWorker` and `BaselineWorker`.
-- `--parallel`: Triggers `ThreadPoolExecutor` orchestration.
-- `--siteid`: Filters `fetch_enabled_sites` result set.
-- `--max_parallel_sites`: Overrides `.env` concurrency limit.
-
----
-
-## 3. Networking & WAF Bypass (High-Fidelity)
-
-### 3.1 Strict HTTPS Enforcement
-All connections are forced to HTTPS at two points:
-1. **Normalization**: `LinkUtility.normalize_url_for_fetch` rewrites all `http://` to `https://`.
-2. **Redirect Loop**: `PageFetcher.fetch` manually upgrades `Location` headers before the next hop.
-
-### 3.2 WAF Bypass Mechanics
-When a `waf_ip` is assigned:
-- **Requests Layer**: The `netloc` is substituted in the URL, but the original domain is preserved in the `Host` header to ensure valid SNI and application-level routing.
-  ```python
-  # processor.py: PageFetcher.fetch
-  if waf_ip:
-      ip_url = urlunparse(parsed._replace(netloc=waf_ip))
-      headers["Host"] = parsed.netloc
-      response = requests.get(ip_url, headers=headers, verify=False)
-  ```
-- **Playwright Layer**: Uses native Chromium socket mapping.
-  ```python
-  # js_engine.py: BrowserManager.render_sync
-  args = [f"--host-rules=MAP {primary_host} {waf_ip}"]
-  ```
+### 3.3 Technical Definition: `netloc`
+- **Definition**: The "Network Location" part of a URL (e.g., `www.google.com`).
+- **WAF Bypass Logic**: The crawler swaps the `netloc` with the `waf_ip` while maintaining the original domain in the `Host` header. This bypasses DNS while satisfying SNI checks.
 
 ---
 
 ## 4. Execution Policy & Skip Rules
-The `ExecutionPolicy` class in `engine.py` defines the system's filtering logic.
 
-### 4.1 Path Skip Rules (Regex)
+### 4.1 Regex Path Skip Rules
 | Rule | Pattern | Purpose |
 | :--- | :--- | :--- |
-| `TAG_PAGE` | `^/(product-)?tag/` | Avoids tag cloud crawler traps. |
-| `AUTHOR_PAGE`| `^/author/` | Prevents crawling user profiles. |
-| `PAGINATION` | `/page/\d*/?$` | Skips standard numbered page lists. |
-| `ASSETS` | `^/(assets|static|...|js)/` | Blocks direct directory crawling. |
+| `TAG_PAGE` | `^/(product-)?tag/` | Prevents tag-cloud crawling loops. |
+| `AUTHOR_PAGE`| `^/author/` | Avoids user profile crawling. |
+| `PAGINATION` | `/page/\d*/?$` | Skips numbered list pages. |
+| `ASSETS` | `^/(assets|js|css)/` | Prevents direct file directory crawling. |
 
-### 4.2 Query Skip Rules
-Skip URLs containing: `page`, `orderby`, `sort`, `add-to-cart`, `utm_`, `_gl=`.
-
-### 4.3 Domain Locking
-Ensures links don't escape to external sites.
-- **Mechanism**: `tldextract` extracts `registered_domain` from the seed and candidate. If they mismatch, the link is discarded.
+### 4.2 Query-Param Filtering
+URLs containing `utm_`, `_gl`, `sort`, `orderby`, or `add-to-cart` are rejected to prevent state-leakage and irrelevant crawling.
 
 ---
 
-## 5. Frontier & Worker Internals
+## 5. The Fallback Hierarchy (Five-Tier Reliability)
 
-### 5.1 The Frontier Cycle
-The `Frontier` class manages a thread-safe `Queue` and three key sets:
-1. `visited`: Tracks fully processed URLs.
-2. `in_progress`: Prevents duplicate fetching by different workers.
-3. `discovered`: Global set of all identified URLs (used for session stats).
+### 5.1 Tier 1: DB Starvation protection
+- **Logic**: Threads must acquire `DB_SEMAPHORE` before borrowing from the pool.
+- **Snippet**: `acquired = DB_SEMAPHORE.acquire(timeout=10)`
 
-### 5.2 Worker Lifecycle (`CrawlerWorker`)
-- **Dequeue**: Blocks until a URL is available or `in_progress` is empty.
-- **Throttling**: Consults `TrafficControl.get_remaining_pause` before every request.
-- **Logging**: Every save or failure is logged with a unique worker name (e.g., `Worker-123-1`).
+### 5.2 Tier 2: Routing Fallback (WAF -> Public DNS)
+- **Logic**: If the TCP probe to `waf_ip` fails, the system reverts to standard Public DNS record fetching.
+
+### 5.3 Tier 3: Rendering Fallback (HTTPS -> JS escalation)
+- **Logic**: If initial probe reveals a blank SPA or `#root` content, escalates to **Playwright**.
+
+### 5.4 Tier 4: Rate Limit Recovery
+- **Logic**: Detects `429`. Signals `TrafficControl` for a domain-wide 5s pause and scale-down.
+
+### 5.5 Tier 5: System Watchdog
+- **Logic**: Hard reset (`os._exit(1)`) if no log activity is detected for 15 minutes.
 
 ---
 
-## 6. The 5-Layer Fallback Hierarchy
-
-| Tier | Safeguard | Implementation Log | Technical Logic |
+## 6. Phase-by-Phase I/O Flow Mapper
+| Module | Function | Input | Output |
 | :--- | :--- | :--- | :--- |
-| **1. DB Guard** | `DB_SEMAPHORE` | `[DB] Semaphore timeout` | Limits concurrency to match connection pool size. |
-| **2. Routing** | IP -> DNS Fallback| `[BYPASS] Falling back to Public DNS` | Reverts to public IP if WAF IP is unreachable via socket check. |
-| **3. Rendering**| HTTPS -> JS Fallback| `[FETCH] JS rendering required` | Escalates to Playwright if initial probe reveals SPA structures. |
-| **4. Rate Limit**| 5s Pause + Scale| `[THROTTLE] Setting DOMAIN-WIDE PAUSE`| Scales workers down to `MIN_WORKERS` to recover from 429 errors. |
-| **5. Watchdog** | os._exit() | `FATAL: Watchdog timer expired!` | Force-kills the process if no activity is logged for 15 minutes. |
+| `main.py` | `resolve_seed_url`| `raw_url` | `validated_https_url` |
+| `engine.py` | `Frontier.enqueue` | `url`, `origin` | `Enqueued / Skip / Duplicate` |
+| `processor.py`| `PageFetcher.fetch` | `url`, `waf_ip` | `response_payload` |
+| `mysql.py` | `insert_crawl_page` | `metadata` | `Inserted / Existed` |
+| `processor.py`| `LinkExtractor` | `html_buffer` | `List[sanitized_urls]` |
 
 ---
 
-## 7. Phase-by-Phase I/O Flow Mapping
-
-| Function | Input | Output | Semantic Context |
-| :--- | :--- | :--- | :--- |
-| `resolve_seed_url` | `raw_url` | `resolved_url` | Validates and probes seed variations. |
-| `Frontier.enqueue` | `url`, `origin` | `status` | Normalizes and performs duplicate/policy checks. |
-| `PageFetcher.fetch` | `url`, `waf_ip` | `result_dict` | Executes network request with WAF bypass. |
-| `insert_crawl_page`| `page_data` | `action_info` | Syncs page metadata and status to DB. |
-| `LinkExtractor.extract`| `html`, `base` | `(urls, assets)` | Parsed discovery and audit targets. |
-
----
-
-## 8. Annotated Flowchart: Block-to-Code Mapping
+## 7. Annotated Cycle Flow: The Discovery Loop
 
 ```mermaid
 graph TD
-    A[CLI Entry] --> B[Seed Resolved]
-    B --> C[Job Started Log]
-    C --> D[Frontier Enqueue]
-    D --> E[Worker Cycle]
-    E --> F[Network Fetch]
-    F --> G[DB Upsert]
-    G --> H[Link Extract]
-    H --> D
+    A[Orchestrator: Batching] --> B[Frontier: Queue Management]
+    B --> C[CrawlerWorker: Thread Cycle]
+    C --> D[PageFetcher: HTTPS/WAF Fetch]
+    D --> E{JS Required?}
+    E -- Yes --> F[BrowserManager: Render]
+    E -- No --> G[DB: insert_crawl_page]
+    F --> G
+    G --> H[LinkExtractor: Scrape]
+    H --> B
 ```
 
-| Block | File | Function | Log Statement | Snippet |
-| :--- | :--- | :--- | :--- | :--- |
-| **B** | `main.py` | `resolve_seed_url` | `Starting URL : {url}` | variation probing |
-| **F** | `processor.py`| `PageFetcher.fetch`| `[FETCH] HTTP 200` | Netloc substitution |
-| **G** | `mysql.py` | `insert_crawl_page`| `[DB] Inserted {id}` | ON DUPLICATE UPDATE |
-| **H** | `processor.py`| `LinkExtractor` | `[INFO] Enqueued {n}` | Regex path filtering |
+### 7.1 Block-by-Block Code Deep Dive
+
+#### **Block D: Fetch Logic (`processor.py`)**
+Handles the core WAF bypass and HTTPS upgrade.
+```python
+# PageFetcher.fetch snippet
+if waf_ip:
+    # Logic: DNS Bypass - Substitute netloc with IP, keep Host header for SNI
+    ip_url = urlunparse(parsed._replace(netloc=waf_ip))
+    headers["Host"] = parsed.netloc
+    response = requests.get(ip_url, headers=headers, verify=False, allow_redirects=False)
+```
+
+#### **Block G: DB Persistence (`mysql.py`)**
+Ensures every discovery attempt is recorded with structural integrity.
+```python
+# insert_crawl_page snippet
+# Logic: ON DUPLICATE KEY UPDATE ensures we update existing pages 
+# while generating a stable Canonical ID via LinkUtility.
+sql = "INSERT INTO crawl_pages (url, status_code, content_hash) VALUES (%s, %s, %s) ..."
+cursor.execute(sql, (url, status, hash))
+```
+
+#### **Block H: Link Extraction (`processor.py`)**
+Parses content and applies the `ExecutionPolicy` filters.
+```python
+# LinkExtractor snippet
+# Logic: BS4 extracts anchors -> Filtered by ExecutionPolicy regex and Domain boundary checks
+soup = BeautifulSoup(html, 'lxml')
+for a in soup.find_all('a', href=True):
+    link = LinkUtility.normalize_url(a['href'], base_url)
+    if ExecutionPolicy.is_allowed_domain(seed_url, link):
+        frontier.enqueue(link)
+```
 
 ---
 
-## 9. Crawler Summary Tables
-Final aggregation logic in `main.py` using `SUMMARY_LOCK`:
+## 8. Appendix: Crawler Summary Tables
+Final aggregation logic protected by `SUMMARY_LOCK` in `main.py`.
 
-| Pillar Metric | Technical Source | Calculation |
-| :--- | :--- | :--- |
-| **Total Attempted**| `stats["visited_count"]` | All items marked `visited` in Frontier. |
-| **Newly Saved** | `w.saved_count` | Sum of successful `INSERT` actions from workers. |
-| **Already in DB** | `w.existed_urls` | Set of URLs returning `Existed` action from DB. |
-| **Throttles** | `w.failed_throttle_count`| Total 429/503 events across all threads. |
-| **JS Rendering** | `w.js_render_stats` | Count of successful Playwright render cycles. |
+| Metric | Source Calculation Logic |
+| :--- | :--- |
+| **Total URLs Attempted**| Sum of all de-queued items from the Frontier. |
+| **Newly Saved** | Count of URLs with `Action: Inserted` in `crawl_pages`. |
+| **Already in DB** | Count of URLs with `Action: Existed` in `crawl_pages`. |
+| **Redirects** | Total manual 3xx hops identified in `PageFetcher`. |
+| **JS Rendering** | Total successful Chromium cycles in `BrowserManager`. |
