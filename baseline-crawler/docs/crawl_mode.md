@@ -1,4 +1,4 @@
-# Web Crawler Documentation: CRAWL Mode Ultra-Granular Technical Guide
+# Web Crawler Documentation: CRAWL Mode Technical Guide
 
 ## 1. Requirements & Dependency Deep-Dive
 The crawler relies on a specific set of libraries to handle networking, parsing, and persistence. Below is the functional role of each dependency within the `CRAWL` mode context.
@@ -12,7 +12,6 @@ The crawler relies on a specific set of libraries to handle networking, parsing,
 | `mysql-connector-python`| Data Persistence | Manages the thread-safe `MySQLConnectionPool`. Handles all interactions with `crawl_jobs` and `crawl_pages`. |
 | `tldextract` | Domain Boundary Logic | Used by `ExecutionPolicy` to ensure workers don't "drift" into external domains by extracting the `registered_domain`. |
 | `python-dotenv` | Configuration | Loads `.env` variables into `os.environ` to control worker scaling and resource limits. |
-| `psutil` | Resource Monitoring | Tracks system memory/CPU usage to prevent the crawler from overwhelming the host during parallel execution. |
 | `brotli` | Content Decoding | Enables the crawler to decode Brotli-compressed response headers from modern web servers (e.g., Cloudflare). |
 
 ---
