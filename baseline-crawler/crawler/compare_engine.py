@@ -57,9 +57,9 @@ class CompareEngine:
         live_canon = LinkUtility.get_canonical_id(url, base_url, enforce_www=enforce_www)
         logger.info(f"[COMPARE] LIVE CANON: {live_canon}")
 
-        # Unified Hashing — normalize live HTML first, then hash
-        live_normalized = ContentNormalizer.normalize_html(html)
-        observed_hash = ContentNormalizer.semantic_hash(live_normalized)
+        # Use raw live HTML for fidelity; semantic_hash applies its own stable normalization.
+        live_html = html
+        observed_hash = ContentNormalizer.semantic_hash(live_html)
 
         matched = False
         results = []
@@ -125,14 +125,14 @@ class CompareEngine:
                 })
                 break
 
-            #  Read BASELINE HTML (stored as normalized)
-            old_normalized = baseline_path.read_text(
+            # Read baseline HTML exactly as stored on disk.
+            old_html = baseline_path.read_text(
                 encoding="utf-8",
                 errors="ignore"
             )
 
             # 🛡️ Detect truncated baselines (head-only, no body)
-            if "<body" not in old_normalized.lower():
+            if "<body" not in old_html.lower():
                 logger.warning(
                     f"[COMPARE] STALE_BASELINE (no <body>) for baseline_id={baseline_id} url={url}. "
                     "Re-run BASELINE mode to fix."
@@ -146,7 +146,7 @@ class CompareEngine:
                 })
                 break
 
-            baseline_hash = ContentNormalizer.semantic_hash(old_normalized)
+            baseline_hash = ContentNormalizer.semantic_hash(old_html)
             previous_observed = fetch_observed_page(siteid, row_canon)
             previous_observed_hash = (
                 previous_observed.get("observed_hash") if previous_observed else None
@@ -193,16 +193,16 @@ class CompareEngine:
                 })
                 break
 
-            print("BASELINE SIZE:", len(old_normalized))
-            print("LIVE SIZE:", len(live_normalized))
+            print("BASELINE SIZE:", len(old_html))
+            print("LIVE SIZE:", len(live_html))
 
             # =====================================
             # CALCULATE SCORE
             # =====================================
 
             score = self._percentage_fn(
-                old_normalized,
-                live_normalized,
+                old_html,
+                live_html,
                 threshold=threshold
             )
 
@@ -235,8 +235,8 @@ class CompareEngine:
 
             self._diff_fn(
                 url=url,
-                html_a=old_normalized,
-                html_b=live_normalized,
+                html_a=old_html,
+                html_b=live_html,
                 out_dir=diff_dir,
                 file_prefix=prefix,
                 severity=severity,
