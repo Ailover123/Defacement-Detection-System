@@ -222,8 +222,8 @@ def _html_to_semantic_lines(html: str, strip_noise: bool = True) -> list[str]:
 
         if isinstance(node, NavigableString):
             text = str(node)
-            # Aggressive normalization for code blocks to handle minification differences
-            if node.parent and node.parent.name in ("script", "style"):
+            # Aggressive normalization for code blocks is used only in noise-stripping mode.
+            if strip_noise and node.parent and node.parent.name in ("script", "style"):
                 # Collapse whitespace around operators
                 text = re.sub(r'\s*([{}()\[\]:;,=+\-*/%&|<>!^?~"\'`])\s*', r'\1', text)
                 
@@ -242,11 +242,15 @@ def _html_to_semantic_lines(html: str, strip_noise: bool = True) -> list[str]:
                     if rest: lines.append(rest)
                     return
             
-            # Standard normalization for all text (collapses multiple spaces to one)
-            text = " ".join(text.split())
-
-            if text:
-                lines.append(text)
+            if strip_noise:
+                # Standard normalization for stable scoring/hash semantics.
+                text = " ".join(text.split())
+                if text:
+                    lines.append(text)
+            else:
+                # Keep visual diff close to source representation.
+                if text.strip():
+                    lines.append(text.strip())
 
         elif isinstance(node, Tag):
             # Skip swiper duplicate slides entirely (JS-generated clones)
@@ -297,18 +301,20 @@ def _html_to_semantic_lines(html: str, strip_noise: bool = True) -> list[str]:
                     if not v:
                         continue
                 
-                # Case-insensitive normalization for specific attributes
-                if k.lower() in CASE_INSENSITIVE_ATTRS:
+                # Case-insensitive normalization and whitespace collapsing are for scoring mode only.
+                if strip_noise and k.lower() in CASE_INSENSITIVE_ATTRS:
                     v = v.lower()
                 
-                # Collapse whitespace
-                v = " ".join(v.split())
+                if strip_noise:
+                    v = " ".join(v.split())
                 
                 valid_attrs[k] = v
 
+            attr_items = sorted(valid_attrs.items()) if strip_noise else valid_attrs.items()
+
             attrs = " ".join(
                 f'{k}="{v}"'
-                for k, v in sorted(valid_attrs.items())
+                for k, v in attr_items
             )
 
             open_tag = f"<{node.name}{(' ' + attrs) if attrs else ''}>"
