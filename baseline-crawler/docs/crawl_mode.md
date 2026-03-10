@@ -105,7 +105,7 @@ The `Frontier` class manages a thread-safe `Queue` and three key sets:
 | :--- | :--- | :--- | :--- |
 | **1. DB Guard** | `DB_SEMAPHORE` | `[DB] Semaphore timeout` | Limits concurrency to match connection pool size. |
 | **2. Routing** | IP -> DNS Fallback| `[BYPASS] Falling back to Public DNS` | Reverts to public IP if WAF IP is unreachable via socket check. |
-| **3. Rendering**| HTTP -> JS Fallback| `[FETCH] JS rendering required` | Escalates to Playwright if initial probe reveals SPA structures. |
+| **3. Rendering**| HTTPS -> JS Fallback| `[FETCH] JS rendering required` | Escalates to Playwright if initial probe reveals SPA structures. |
 | **4. Rate Limit**| 5s Pause + Scale| `[THROTTLE] Setting DOMAIN-WIDE PAUSE`| Scales workers down to `MIN_WORKERS` to recover from 429 errors. |
 | **5. Watchdog** | os._exit() | `FATAL: Watchdog timer expired!` | Force-kills the process if no activity is logged for 15 minutes. |
 
