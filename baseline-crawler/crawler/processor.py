@@ -7,6 +7,7 @@ KEY FUNCTIONS/CLASSES: LinkUtility, TrafficControl, PageFetcher, LinkExtractor
 import os
 import requests
 import time
+import hashlib
 import urllib3
 import tldextract
 import threading
@@ -306,6 +307,32 @@ class PageFetcher:
         """
 
         start = time.time()
+
+        def _save_tmp_snapshot(source_label: str, snapshot_html: str, snapshot_final_url: str):
+            if not save_to_tmp or not snapshot_html:
+                return
+
+            try:
+                tmp_dir = DATA_DIR / "tmp"
+                tmp_dir.mkdir(parents=True, exist_ok=True)
+
+                sid = str(siteid) if siteid is not None else "na"
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                uniq = hashlib.sha256(
+                    f"{url}|{source_label}|{time.time_ns()}".encode("utf-8")
+                ).hexdigest()[:12]
+
+                out_file = tmp_dir / f"{ts}_{sid}_{source_label}_{uniq}.html"
+                header = (
+                    f"<!-- requested_url: {url} -->\n"
+                    f"<!-- final_url: {snapshot_final_url or url} -->\n"
+                    f"<!-- source: {source_label} -->\n\n"
+                )
+                out_file.write_text(header + snapshot_html, encoding="utf-8")
+
+            except Exception as e:
+                logger.warning(f"[FETCH] Failed to save tmp HTML snapshot for {url}: {e}")
+
         http_result = PageFetcher.fetch(url, siteid)
 
         html = http_result.get("html", "")
@@ -332,6 +359,7 @@ class PageFetcher:
                     html, final_url, status = BrowserManager.render_sync(url)
 
                 if PageFetcher._is_invalid_render_result(final_url, html):
+                    _save_tmp_snapshot("invalid_js_after_http_fail", html, final_url)
                     err = f"Invalid JS render result for {url}: final_url={final_url}"
                     logger.warning(f"[FETCH] {err}")
                     return {
@@ -343,6 +371,8 @@ class PageFetcher:
                         "content_type": "",
                         "fetch_time_ms": int((time.time() - start) * 1000),
                     }
+
+                _save_tmp_snapshot("js_after_http_fail", html, final_url)
 
                 return {
                     "success": True,
@@ -384,6 +414,7 @@ class PageFetcher:
                     html, final_url, status = BrowserManager.render_sync(url)
 
                 if PageFetcher._is_invalid_render_result(final_url, html):
+                    _save_tmp_snapshot("invalid_js_render", html, final_url)
                     err = f"Invalid JS render result for {url}: final_url={final_url}"
                     logger.warning(f"[FETCH] {err}")
                     return {
@@ -395,6 +426,8 @@ class PageFetcher:
                         "content_type": "",
                         "fetch_time_ms": int((time.time() - start) * 1000),
                     }
+
+                _save_tmp_snapshot("js_rendered", html, final_url)
 
                 return {
                     "success": True,
@@ -414,6 +447,7 @@ class PageFetcher:
                     logger.warning(
                         f"[FETCH] Falling back to HTTP HTML after JS failure: {url}"
                     )
+                    _save_tmp_snapshot("http_fallback_after_js_fail", http_html, http_final_url)
                     return {
                         "success": True,
                         "html": http_html,
@@ -438,6 +472,8 @@ class PageFetcher:
         # ------------------------------------------------------
 
         logger.debug(f"[FETCH] Using HTTP HTML (no JS needed): {url}")
+
+        _save_tmp_snapshot("http", html, http_result.get("final_url", url))
 
         return {
             "success": True,
