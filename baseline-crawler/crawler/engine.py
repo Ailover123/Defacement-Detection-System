@@ -84,15 +84,26 @@ class ExecutionPolicy:
 
     @staticmethod
     def is_allowed_domain(seed_url: str, candidate_url: str, current_url: str = None) -> bool:
-        s_netloc = urlparse(seed_url).netloc.lower().split(":")[0]
-        c_netloc = urlparse(candidate_url).netloc.lower().split(":")[0]
-        if s_netloc == c_netloc: return True
+        import tldextract
+        # 🔒 Robust scheme handling
+        temp_seed = seed_url if "://" in seed_url else "https://" + seed_url
+        temp_cand = candidate_url if "://" in candidate_url else "https://" + candidate_url
+        
+        # 1. Registered domain match (e.g. sattvagroup.in matches sattvagroup.com)
+        s_ext = tldextract.extract(temp_seed)
+        c_ext = tldextract.extract(temp_cand)
+        
+        if s_ext.registered_domain == c_ext.registered_domain and s_ext.registered_domain != "":
+            return True
+            
+        # 2. Match against current page domain (allows sub-links on redirected domains)
         if current_url:
-            curr_netloc = urlparse(current_url).netloc.lower().split(":")[0]
-            if curr_netloc == c_netloc: return True
-        s_base = s_netloc[4:] if s_netloc.startswith("www.") else s_netloc
-        c_base = c_netloc[4:] if c_netloc.startswith("www.") else c_netloc
-        return s_base == c_base
+            temp_curr = current_url if "://" in current_url else "https://" + current_url
+            curr_ext = tldextract.extract(temp_curr)
+            if curr_ext.registered_domain == c_ext.registered_domain and curr_ext.registered_domain != "":
+                return True
+                
+        return False
 
 
 # === FRONTIER MANAGEMENT ===
@@ -184,7 +195,7 @@ class CrawlerWorker(threading.Thread):
     SKIP_REPORT = defaultdict(lambda: {"count": 0, "urls": []})
     SKIP_LOCK = threading.Lock()
 
-    def __init__(self, frontier, name, custid, siteid_map, job_id, crawl_mode, seed_url, original_site_url=None, skip_report=None, skip_lock=None, target_urls=None, compare_results=None, compare_lock=None):
+    def __init__(self, frontier, name, custid, siteid_map, job_id, crawl_mode, seed_url, original_site_url=None, skip_report=None, skip_lock=None, target_urls=None, compare_results=None, compare_lock=None, waf_ip=None):
         super().__init__(name=name)
         self.frontier = frontier
         self.running = True
@@ -194,6 +205,7 @@ class CrawlerWorker(threading.Thread):
         self.crawl_mode = crawl_mode
         self.seed_url = seed_url
         self.original_site_url = original_site_url
+        self.waf_ip = waf_ip  # Per-site WAF IP — used in failure logs to show routing context
         self.skip_report = skip_report if skip_report is not None else defaultdict(lambda: {"count": 0, "urls": []})
         self.skip_lock = skip_lock if skip_lock is not None else threading.Lock()
         self.target_urls = target_urls
@@ -237,7 +249,8 @@ class CrawlerWorker(threading.Thread):
     def _db_url(self, url):
         # ✅ Standardize on Canonical ID for log consistency
         from crawler.processor import LinkUtility
-        return LinkUtility.get_canonical_id(url, self.original_site_url or "", enforce_www=self.enforce_www)
+        # 🔒 ORIGIN LOCK: Ensure log messages show the masked domain
+        return LinkUtility.get_canonical_id(url, self.original_site_url or "", enforce_www=self.enforce_www, origin_url=self.original_site_url)
 
     def log(self, level, msg):
         getattr(logger, level)(msg, extra={'context': self.name})
@@ -271,11 +284,17 @@ class CrawlerWorker(threading.Thread):
                 # -------------------------
                 # FETCH (Rendering enabled with temp file matching Baseline logic)
                 # -------------------------
-                fetch_url = LinkUtility.force_www_url(url)
+                # ✅ Smart Preference: Follow the seed URL's subdomain style (naked vs www)
+                fetch_url = LinkUtility.normalize_url(url, preference_url=self.seed_url)
+                
                 force_js = self.crawl_mode == "COMPARE"
                 result = PageFetcher.fetch_rendered(fetch_url, siteid=self.siteid, save_to_tmp=True, force_js=force_js)
-                final_url = result.get("final_url", url)
+                final_url = result.get("final_url", fetch_url)
                 html = result.get("html", "")
+
+                # 📝 Log Client-Side Redirects (JS or Meta)
+                if LinkUtility.normalize_url(final_url) != LinkUtility.normalize_url(fetch_url):
+                    self.log("info", f"[REDIRECT] Client-side: {fetch_url} -> {final_url}")
 
                 if result.get("error") and any(err in str(result["error"]) for err in ("429", "503")):
                     self.failed_throttle_count += 1
@@ -289,6 +308,12 @@ class CrawlerWorker(threading.Thread):
                         result["success"] = False
                         initial_status = 404
 
+                # 🛡️ Skip ONLY true connection failures (Status 0) or empty renders
+                # We want 4xx/5xx to reach the reporting block below.
+                if self.crawl_mode == "CRAWL" and (not html and result.get("status_code", 0) == 0):
+                    self.log("warning", f"CRAWL: Skipping insertion for true connection failure: {url}")
+                    continue
+
                 if not result["success"]:
                     reason = result.get("error", "Unknown Fetch Error")
                     if "ignored content type" in str(reason):
@@ -297,7 +322,20 @@ class CrawlerWorker(threading.Thread):
                     self.failed_count += 1
                     if initial_status == 404: reason = "http error: 404"
                     self.failure_reasons[reason] += 1
-                    self.log("error", f"Fetch failed for {url}: {reason}")
+                    if self.waf_ip:
+                        waf_is_hostname = any(c.isalpha() for c in self.waf_ip)
+                        if waf_is_hostname:
+                            import socket
+                            try:
+                                resolved = socket.gethostbyname(self.waf_ip)
+                                _routing = f"via {self.waf_ip} → {resolved}"
+                            except Exception:
+                                _routing = f"via {self.waf_ip} (DNS unresolved)"
+                        else:
+                            _routing = f"via {self.waf_ip}"
+                    else:
+                        _routing = "direct (no WAF IP)"
+                    self.log("error", f"Fetch failed for {url}: {reason} [{_routing}]")
                     
                     # ✅ Sync fail status to DB in COMPARE mode as requested
                     if self.crawl_mode == "COMPARE":
@@ -311,7 +349,7 @@ class CrawlerWorker(threading.Thread):
                             "custid": self.custid,
                             "siteid": self.siteid,
                             "url": url,
-                            "parent_url": LinkUtility.get_canonical_id(discovered_from, self.original_site_url, enforce_www=self.enforce_www) if discovered_from else None,
+                            "parent_url": LinkUtility.get_canonical_id(discovered_from, self.original_site_url, enforce_www=self.enforce_www, origin_url=self.original_site_url) if discovered_from else None,
                             "depth": depth,
                             "status_code": sync_status,
                             "content_type": "",
@@ -321,7 +359,7 @@ class CrawlerWorker(threading.Thread):
                             "base_url": self.original_site_url
                         })
 
-                    # Do not run compare/discovery flow for failed fetches.
+                    # 🚫 Skip remaining processing (DB insert, link extraction) for failed URLs
                     continue
                     
 
@@ -348,7 +386,7 @@ class CrawlerWorker(threading.Thread):
                         "custid": self.custid,
                         "siteid": self.siteid,
                         "url": final_url, # Pass raw URL, mysql.py handles canonicalization
-                        "parent_url": LinkUtility.get_canonical_id(discovered_from, self.original_site_url, enforce_www=self.enforce_www) if discovered_from else None,
+                        "parent_url": LinkUtility.get_canonical_id(discovered_from, self.original_site_url, enforce_www=self.enforce_www, origin_url=self.original_site_url) if discovered_from else None,
                         "depth": depth,
                         "status_code": result.get("status_code", 0),
                         "content_type": result.get("content_type", ""),
@@ -395,7 +433,7 @@ class CrawlerWorker(threading.Thread):
                                 "custid": self.custid,
                                 "siteid": self.siteid,
                                 "url": r["url"],
-                                "parent_url": LinkUtility.get_canonical_id(discovered_from, self.original_site_url, enforce_www=self.enforce_www) if discovered_from else None,
+                                "parent_url": LinkUtility.get_canonical_id(discovered_from, self.original_site_url, enforce_www=self.enforce_www, origin_url=self.original_site_url) if discovered_from else None,
                                 "depth": depth,
                                 "status_code": result.get("status_code", 0),
                                 "content_type": result.get("content_type", ""),
@@ -431,13 +469,15 @@ class CrawlerWorker(threading.Thread):
                 # ======================================================
                 if self.crawl_mode in ("CRAWL", "COMPARE") and not self.target_urls:
                     # Extract + enqueue
-                    urls, _ = LinkExtractor.extract_urls(html, final_url)
+                    from urllib.parse import urlparse as _up
+                    _origin_domain = _up(self.original_site_url if "://" in self.original_site_url else "https://" + self.original_site_url).netloc if self.original_site_url else None
+                    urls, _ = LinkExtractor.extract_urls(html, final_url, origin_domain=_origin_domain)
                     if not urls and JSIntelligence.needs_js_rendering(html):
                         self.js_render_stats["total"] += 1
                         try:
                             html, final_url, js_status = JS_RENDERER.render(final_url)
                             self.js_render_stats["success"] += 1
-                            urls, _ = LinkExtractor.extract_urls(html, final_url)
+                            urls, _ = LinkExtractor.extract_urls(html, final_url, origin_domain=_origin_domain)
                         except Exception as e:
                             self.js_render_stats["failed"] += 1
                             self.log("error", f"JS Render failed: {e}")

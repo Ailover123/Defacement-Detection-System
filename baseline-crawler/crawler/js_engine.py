@@ -134,12 +134,17 @@ class BrowserManager:
     _queues = []
     _init_lock = threading.Lock()
     _rr_index = 0
+    _current_domain = None
+    _current_host_rule = None # e.g. "MAP domain.com 1.2.3.4"
 
     # --------------------------------------------------------
     # Worker Thread
     # --------------------------------------------------------
 
     class _Worker(threading.Thread):
+
+        _LOG_LOCK = threading.Lock()
+        _LOGGED_FALLBACKS = set()
 
         def __init__(self, wid, task_queue):
             super().__init__(daemon=True, name=f"RenderWorker-{wid}")
@@ -163,18 +168,28 @@ class BrowserManager:
                                 "--disable-background-networking",
                                 "--disable-renderer-backgrounding",
                                 "--disable-blink-features=AutomationControlled",
-                            ],
+                                "--disable-http2",
+                            ] + ([f"--host-rules={BrowserManager._current_host_rule}"] if BrowserManager._current_host_rule else []),
                         )
 
                         # Block heavy resources (keep JS)
+                        # ⚠️ MUST be exception-safe: when a page times out, Playwright
+                        # cancels in-flight route tasks. Without try/except here,
+                        # asyncio.CancelledError prints noisy tracebacks to stderr.
                         def route_handler(route):
-                            if route.request.resource_type in (
-                                "image",
-                                "font",
-                                "media",
-                            ):
-                                return route.abort()
-                            return route.continue_()
+                            try:
+                                if route.request.resource_type in (
+                                    "image",
+                                    "font",
+                                    "media",
+                                ):
+                                    return route.abort()
+                                return route.continue_()
+                            except BaseException:
+                                # Page was closed or context was torn down mid-route.
+                                # asyncio.CancelledError is a BaseException (not Exception) in
+                                # Python 3.8+ — must use BaseException to catch it here.
+                                pass
 
                         def is_page_crash_error(err: Exception) -> bool:
                             msg = str(err).lower()
@@ -191,6 +206,7 @@ class BrowserManager:
                                 user_agent=USER_AGENT,
                                 viewport={"width": 1280, "height": 900},
                                 java_script_enabled=True,
+                                ignore_https_errors=True,
                             )
                             ctx.route("**/*", route_handler)
                             return ctx, ctx.new_page()
@@ -204,7 +220,7 @@ class BrowserManager:
                             if item is None:
                                 return
 
-                            url, result_q = item
+                            url, result_q, waf_ip, primary_host = item
 
                             try:
                                 status_code = 0
@@ -216,6 +232,15 @@ class BrowserManager:
                                     try:
                                         nav_error = None
                                         response = None
+
+                                        # ====================================================
+                                        # Routing / Fast Navigation Setup
+                                        # ====================================================
+                                        try:
+                                            # Clear any old routes (SNI fix/routing reset)
+                                            page.unroute("**")
+                                        except:
+                                            pass
 
                                         # ====================================================
                                         # STAGE 1: DOMContentLoaded attempt
@@ -230,20 +255,44 @@ class BrowserManager:
                                                 status_code = response.status
                                         except Exception as e:
                                             nav_error = e
+                                            logger.warning(
+                                                f"[JS-ENGINE] DOMContentLoaded attempt failed for {url}: {e}"
+                                            )
 
                                         # ====================================================
-                                        # STAGE 2: Commit fallback if DOM failed
+                                        # STAGE 2: Commit fallback if DOM failed or blocked by WAF
                                         # ====================================================
-                                        if not response:
+                                        fallback_reason = False
+                                        if waf_ip and (status_code == 403 or status_code == 0):
+                                            from urllib.parse import urlparse
+                                            current_host = urlparse(url).netloc.lower().replace("www.", "")
+                                            target_host = (primary_host or "").lower().replace("www.", "")
+                                            if current_host == target_host:
+                                                logger.warning(f"[BYPASS] Direct IP ({waf_ip}) returned HTTP {status_code}. Triggering fallback...")
+                                                fallback_reason = True
+
+                                        if not response or fallback_reason:
                                             # Avoid navigating again on a crashed page.
                                             if nav_error and is_page_crash_error(nav_error):
                                                 raise nav_error
+
+                                            if fallback_reason:
+                                                with self._LOG_LOCK:
+                                                    fallback_key = primary_host or "default"
+                                                    if fallback_key not in self._LOGGED_FALLBACKS:
+                                                        logger.warning(f"[BYPASS] Direct IP ({waf_ip}) failed for {fallback_key}. Retrying with standard public IP...")
+                                                        self._LOGGED_FALLBACKS.add(fallback_key)
+                                                # Clear host routing to just use the internet
+                                                try:
+                                                    page.unroute("**")
+                                                except:
+                                                    pass
 
                                             try:
                                                 response = page.goto(
                                                     url,
                                                     wait_until="commit",
-                                                    timeout=15000,
+                                                    timeout=15000 if not fallback_reason else 30000,
                                                 )
                                                 if response:
                                                     status_code = response.status
@@ -260,11 +309,10 @@ class BrowserManager:
                                             )
 
                                         # Browser error pages must not be processed as crawlable HTML.
-                                        final_url = page.url or ""
-                                        if final_url.lower().startswith("chrome-error://"):
-                                            raise RuntimeError(
-                                                f"Browser error page returned for {url}: {final_url}"
-                                            )
+                                        final_page_url = page.url or ""
+                                        if final_page_url.lower().startswith(("chrome-error://", "chrome://")):
+                                            logger.warning(f"[JS-ENGINE] Rejected internal browser page: {final_page_url}")
+                                            raise RuntimeError(f"Browser error page returned: {final_page_url}")
 
                                         # ====================================================
                                         # STAGE 3: Stabilization
@@ -296,7 +344,7 @@ class BrowserManager:
                                         result_q.put(
                                             RenderResult(
                                                 html,
-                                                final_url,
+                                                final_page_url,
                                                 status_code,
                                             )
                                         )
@@ -382,6 +430,53 @@ class BrowserManager:
     # --------------------------------------------------------
 
     @classmethod
+    def configure(cls, domain, waf_ip):
+        """
+        Configure site-specific host rules for the browser.
+        If the domain/IP mapping changes, existing workers will be restarted.
+        """
+        if not domain or not waf_ip:
+            new_rule = None
+        else:
+            # Map BOTH root and www to the same IP for maximum reliability
+            root_domain = domain.lower().replace("www.", "")
+            new_rule = f"MAP {root_domain} {waf_ip}, MAP www.{root_domain} {waf_ip}"
+        
+        with cls._init_lock:
+            if cls._current_domain == domain and cls._current_host_rule == new_rule:
+                return # No change
+            
+            logger.info(f"[BYPASS] Using Chromium Native Host Mapping (SNI Fix) for {domain} -> {waf_ip}")
+            # If WAF IP is a hostname (not a raw IP), resolve it so we know which server Chromium hits.
+            # Chromium's --host-rules does this DNS lookup at runtime — we mirror it here for visibility.
+            if waf_ip and any(c.isalpha() for c in waf_ip):
+                import socket
+                try:
+                    resolved_ip = socket.gethostbyname(waf_ip)
+                    logger.info(
+                        f"[BYPASS] Hostname WAF IP '{waf_ip}' resolved to {resolved_ip} "
+                        f"— Chromium will connect to this IP with SNI={domain}"
+                    )
+                except Exception as dns_err:
+                    logger.warning(f"[BYPASS] Could not resolve hostname WAF IP '{waf_ip}': {dns_err}")
+            cls._current_domain = domain
+            cls._current_host_rule = new_rule
+            
+            # Reset workers if rule changed
+            if cls._workers:
+                logger.info("[JS-ENGINE] Host rules changed. Restarting workers...")
+                for q in cls._queues:
+                    q.put(None) # Signal workers to exit
+                
+                # Wait for threads 
+                for w in cls._workers:
+                    w.join(timeout=2)
+                
+                cls._workers = []
+                cls._queues = []
+                cls._Worker._LOGGED_FALLBACKS.clear()
+
+    @classmethod
     def _ensure_running(cls):
         with cls._init_lock:
             if (
@@ -405,7 +500,7 @@ class BrowserManager:
     # --------------------------------------------------------
 
     @classmethod
-    def render_sync(cls, url: str):
+    def render_sync(cls, url: str, waf_ip: str = None, primary_host: str = None):
         cls._ensure_running()
 
         result_q = queue.Queue()
@@ -413,7 +508,7 @@ class BrowserManager:
         worker_index = cls._rr_index % len(cls._queues)
         cls._rr_index += 1
 
-        cls._queues[worker_index].put((url, result_q))
+        cls._queues[worker_index].put((url, result_q, waf_ip, primary_host))
 
         result = result_q.get()
 

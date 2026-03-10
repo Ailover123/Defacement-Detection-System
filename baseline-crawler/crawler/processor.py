@@ -68,10 +68,8 @@ class LinkUtility:
         ))
 
     # -------------------------------
-    # STORAGE CANONICAL (DB)
-    # -------------------------------
     @staticmethod
-    def get_canonical_id(url: str, base: str | None = None, enforce_www: bool = False) -> str:
+    def get_canonical_id(url: str, base: str | None = None, enforce_www: bool = False, origin_url: str | None = None) -> str:
         if not url:
             return ""
 
@@ -81,13 +79,23 @@ class LinkUtility:
             url = "https://" + url
 
         if  base and "://" not in url:
-            url = urljoin(base,url)
+            url = urljoin(base, url)
 
         parsed = urlparse(url)
-
         netloc = parsed.netloc.lower()
 
-        # 🛡️ Force/Strip www based on enforce_www
+        # 🛡️ ORIGIN LOCK: If origin_url is provided (e.g. sattvagroup.in), 
+        # force the netloc to match it, even if we redirected to another domain (.com)
+        if origin_url:
+            if "://" not in origin_url:
+                origin_url = "https://" + origin_url
+            origin_parsed = urlparse(origin_url)
+            origin_netloc = origin_parsed.netloc.lower()
+            
+            # Mask the domain back to the origin
+            netloc = origin_netloc
+
+        # 🛡️ Force/Strip www based on enforce_www (applied after origin locking)
         if enforce_www:
             if not netloc.startswith("www."):
                 netloc = "www." + netloc
@@ -144,42 +152,13 @@ class LinkUtility:
     @staticmethod
     def force_www_url(url: str) -> str:
         """
-        Fetch-only helper.
-        Forces https:// scheme and adds www prefix ONLY for naked domains.
-        Does NOT affect DB canonicalization.
+        [LEGACY] Fetch-only helper. 
+        Previously forced https:// scheme and added www prefix.
+        NOW DISABLED: Returns original URL with https to avoid redirect loops.
         """
-        if not url:
-            return ""
-
-        # Normalize scheme to https
-        if "://" not in url:
-            url = "https://" + url
-            
-        parsed = urlparse(url)
-        # Always force https as requested
-        scheme = "https"
-        netloc = parsed.netloc.lower()
-
-        try:
-            ext = tldextract.extract(url)
-            # Only add www. if it is a naked domain (no subdomain)
-            if not ext.subdomain:
-                new_netloc = f"www.{netloc}"
-            else:
-                # Keep existing subdomain (www, admin, etc.)
-                new_netloc = netloc
-        except Exception:
-            # Fallback to simple logic if tldextract fails
-            new_netloc = netloc if netloc.startswith("www.") else f"www.{netloc}"
-
-        return urlunparse((
-            scheme,
-            new_netloc,
-            parsed.path,
-            parsed.params,
-            parsed.query,
-            parsed.fragment,
-        ))
+        if not url: return ""
+        if "://" not in url: url = "https://" + url
+        return url
 
 
 # === TRAFFIC CONTROL ===
@@ -238,6 +217,24 @@ class PageFetcher:
 
     TIMEOUT = 15
 
+    # Class-level WAF bypass state (set via configure())
+    _current_waf_ip = None
+    _current_primary_host = None
+
+    @classmethod
+    def configure(cls, domain, waf_ip):
+        """
+        Set the WAF bypass IP for HTTP fetching.
+        When set, HTTP requests route to the IP directly with a Host header.
+        Pass None to disable bypass.
+        """
+        cls._current_waf_ip = waf_ip if waf_ip else None
+        cls._current_primary_host = domain if domain else None
+        if waf_ip:
+            logger.info(f"[FETCH] HTTPS bypass configured: {domain} -> {waf_ip}")
+        else:
+            logger.info("[FETCH] HTTP bypass disabled (standard routing).")
+
     @staticmethod
     def _is_invalid_render_result(final_url: str, html: str) -> bool:
         final = (final_url or "").lower()
@@ -254,41 +251,105 @@ class PageFetcher:
     @staticmethod
     def fetch(url: str, siteid=None):
         """
-        FAST HTTP fetch.
-        Used before deciding if JS rendering is required.
+        FAST HTTPS-first fetch.
+        If PageFetcher._current_waf_ip is set and the URL matches the primary host,
+        routes via WAF IP directly (IP as URL host + Host header).
+        Handles redirects manually to maintain WAF IP routing.
         """
+        from urllib.parse import urlparse, urlunparse, urljoin
+        
+        waf_ip = PageFetcher._current_waf_ip
+        primary_host = PageFetcher._current_primary_host
+        
+        current_url = url
+        max_redirects = 10
+        redirect_count = 0
+        
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
 
         try:
+            while redirect_count < max_redirects:
+                fetch_url = current_url
+                original_netloc = None
+                
+                parsed = urlparse(current_url)
+                if waf_ip and primary_host:
+                    url_host = parsed.netloc.lower().replace("www.", "")
+                    target_host = primary_host.lower().replace("www.", "")
+                    if url_host == target_host:
+                        # Replace host with WAF IP, keep domain in Host header
+                        ip_url = urlunparse(parsed._replace(netloc=waf_ip))
+                        fetch_url = ip_url
+                        headers["Host"] = parsed.netloc
+                        original_netloc = parsed.netloc
 
-            headers = {
-                "User-Agent": USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml",
-            }
+                response = requests.get(
+                    fetch_url,
+                    headers=headers,
+                    timeout=PageFetcher.TIMEOUT,
+                    allow_redirects=False,  # 🛡️ Manual control
+                    verify=False,
+                )
 
-            response = requests.get(
-                url,
-                headers=headers,
-                timeout=PageFetcher.TIMEOUT,
-                allow_redirects=True,
-            )
+                # Check for redirect
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get("Location")
+                    if not location:
+                        break
+                    
+                    # Resolve relative redirects
+                    next_url = urljoin(current_url, location)
+                    if next_url == current_url: # Infinite loop protection
+                        break
 
-            return {
-                "success": True,
-                "status_code": response.status_code,
-                "html": response.text or "",
-                "final_url": response.url,
-                "content_type": response.headers.get("Content-Type", ""),
-            }
+                    logger.info(f"[FETCH] Redirect {response.status_code}: {current_url} -> {next_url}")
 
-        except Exception as e:
+                    # 🔒 Always upgrade HTTP redirects to HTTPS
+                    if next_url.startswith("http://"):
+                        next_url = "https://" + next_url[7:]
+                        
+                    current_url = next_url
+                    redirect_count += 1
+                    continue
+                else:
+                    # Not a redirect, we're done
+                    # Restore final_url if we used IP
+                    final_url = response.url
+                    if original_netloc:
+                        resp_parsed = urlparse(response.url)
+                        final_url = urlunparse(resp_parsed._replace(netloc=original_netloc))
 
-            logger.warning(f"[FETCH] HTTP fetch failed for {url}: {e}")
+                    # 🚫 Treat 4xx/5xx HTTP responses as failures
+                    # (previously hardcoded success=True for ALL status codes)
+                    is_success = response.status_code < 400
+                    return {
+                        "success": is_success,
+                        "status_code": response.status_code,
+                        "html": response.text or "",
+                        "final_url": final_url,
+                        "content_type": response.headers.get("Content-Type", ""),
+                        "error": f"http error: {response.status_code}" if not is_success else None,
+                    }
 
             return {
                 "success": False,
                 "status_code": 0,
                 "html": "",
-                "final_url": url,
+                "final_url": current_url,
+                "error": f"Max redirects ({max_redirects}) exceeded" if redirect_count >= max_redirects else "Redirect loop detected",
+            }
+
+        except Exception as e:
+            logger.warning(f"[FETCH] HTTP fetch failed for {url}: {e}")
+            return {
+                "success": False,
+                "status_code": 0,
+                "html": "",
+                "final_url": current_url,
                 "error": str(e),
             }
 
@@ -346,12 +407,39 @@ class PageFetcher:
         # ------------------------------------------------------
 
         if not http_result["success"]:
+            http_status = http_result.get("status_code", 0)
 
-            logger.info(f"[FETCH] HTTP failed → using JS render: {url}")
+            # 🚫 Real HTTP error (4xx/5xx): no point retrying with JS — page genuinely doesn't exist.
+            # ⚠️ EXCEPTION: When WAF IP is a HOSTNAME (e.g. shops.myshopify.com, not a real IP),
+            # the HTTP bypass routes via that hostname as URL host → SNI mismatch at TLS level →
+            # the remote server (e.g. Shopify) returns 403 as a routing artifact, NOT a real 403.
+            # Playwright's --host-rules does DNS-level mapping (preserves original SNI) and works.
+            # So: if WAF IP is set AND it looks like a hostname (has letters, not just digits/dots),
+            # treat a 403 as a routing failure and fall through to Playwright.
+            waf_ip_active = bool(PageFetcher._current_waf_ip)
+            waf_ip_is_hostname = waf_ip_active and not all(
+                c.isdigit() or c == "." for c in (PageFetcher._current_waf_ip or "")
+            )
+            if http_status >= 400 and not (http_status == 403 and waf_ip_is_hostname):
+                logger.info(f"[FETCH] HTTP {http_status} → skipping JS render (real error): {url}")
+                return {
+                    **http_result,
+                    "fetch_time_ms": int((time.time() - start) * 1000),
+                }
+
+            if http_status == 403 and waf_ip_is_hostname:
+                logger.info(
+                    f"[FETCH] HTTP 403 via hostname WAF IP ({PageFetcher._current_waf_ip}) "
+                    f"— likely SNI mismatch, not real 403. Falling back to Playwright: {url}"
+                )
+
+            # 🔄 Connection-level failure (timeout, SSL, DNS) → fallback to JS render
+            logger.info(f"[FETCH] HTTP connection failed → using JS render: {url}")
 
             try:
-
-                html, final_url, status = BrowserManager.render_sync(url)
+                _wip = PageFetcher._current_waf_ip
+                _ph = PageFetcher._current_primary_host
+                html, final_url, status = BrowserManager.render_sync(url, waf_ip=_wip, primary_host=_ph)
                 # Retry once if truncated (no <body>)
                 if html and "<body" not in html.lower():
                     logger.warning(f"[FETCH] Truncated JS render (no <body>), retrying: {url}")
@@ -404,14 +492,15 @@ class PageFetcher:
             logger.info(f"[FETCH] JS rendering required: {url}")
 
             try:
-
-                html, final_url, status = BrowserManager.render_sync(url)
+                _wip = PageFetcher._current_waf_ip
+                _ph = PageFetcher._current_primary_host
+                html, final_url, status = BrowserManager.render_sync(url, waf_ip=_wip, primary_host=_ph)
 
                 # Retry once if truncated (no <body>)
                 if html and "<body" not in html.lower():
                     logger.warning(f"[FETCH] Truncated JS render (no <body>), retrying: {url}")
                     time.sleep(2)
-                    html, final_url, status = BrowserManager.render_sync(url)
+                    html, final_url, status = BrowserManager.render_sync(url, waf_ip=_wip, primary_host=_ph)
 
                 if PageFetcher._is_invalid_render_result(final_url, html):
                     _save_tmp_snapshot("invalid_js_render", html, final_url)
@@ -506,9 +595,12 @@ class LinkExtractor:
         return types
 
     @staticmethod
-    def extract_urls(html, base_url):
+    def extract_urls(html, base_url, origin_domain=None):
         soup = BeautifulSoup(html, 'html.parser')
-        base_domain = urlparse(base_url).netloc
+        
+        # Boundary: allow links on the CURRENT domain (where we are) 
+        # OR the original domain (what we want to keep).
+        current_domain = urlparse(base_url).netloc
         urls, assets = [], []
 
         def strip_fragment(u):
@@ -529,7 +621,7 @@ class LinkExtractor:
                 
                 first_part = temp_href.split('/')[0].lower()
                 if '.' in first_part and not first_part.startswith('.'):
-                    current_netloc = urlparse(base_url).netloc.lower().replace('www.', '')
+                    current_netloc = current_domain.lower().replace('www.', '')
                     clean_cand = first_part.replace('www.', '')
                     # ✅ Refined heuristic: Only match if it's the same domain or a clear subdomain relationship
                     if clean_cand == current_netloc or clean_cand.endswith("." + current_netloc) or current_netloc.endswith("." + clean_cand):
@@ -537,24 +629,24 @@ class LinkExtractor:
 
             url = strip_fragment(urljoin(base_url, href))
             if "®" in url: url = url.replace("®", "&reg")
-            if LinkExtractor._is_allowed_url(url, base_domain): urls.append(url)
+            if LinkExtractor._is_allowed_url(url, current_domain, origin_domain=origin_domain): urls.append(url)
 
         for img in soup.find_all('img', src=True):
             asset_url = strip_fragment(urljoin(base_url, img['src']))
-            if LinkExtractor._is_allowed_url(asset_url, base_domain): assets.append(asset_url)
+            if LinkExtractor._is_allowed_url(asset_url, current_domain, origin_domain=origin_domain): assets.append(asset_url)
 
         for link in soup.find_all('link', href=True):
             asset_url = strip_fragment(urljoin(base_url, link['href']))
-            if LinkExtractor._is_allowed_url(asset_url, base_domain): assets.append(asset_url)
+            if LinkExtractor._is_allowed_url(asset_url, current_domain, origin_domain=origin_domain): assets.append(asset_url)
 
         for script in soup.find_all('script', src=True):
             asset_url = strip_fragment(urljoin(base_url, script['src']))
-            if LinkExtractor._is_allowed_url(asset_url, base_domain): assets.append(asset_url)
+            if LinkExtractor._is_allowed_url(asset_url, current_domain, origin_domain=origin_domain): assets.append(asset_url)
 
         return urls, assets
 
     @staticmethod
-    def _is_allowed_url(url, base_domain):
+    def _is_allowed_url(url, base_domain, origin_domain=None):
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"): return False
         
@@ -567,8 +659,19 @@ class LinkExtractor:
             return False
 
         cand_ext = tldextract.extract(url)
-        base_ext = tldextract.extract(f"https://{base_domain}")
-        return cand_ext.registered_domain == base_ext.registered_domain
+        curr_ext = tldextract.extract(f"https://{base_domain}")
+
+        # ✅ Allow if matches the domain we are currently browsing (handling redirects)
+        if cand_ext.registered_domain == curr_ext.registered_domain:
+            return True
+        
+        # ✅ Allow if matches the original registered domain
+        if origin_domain:
+            origin_ext = tldextract.extract(f"https://{origin_domain}")
+            if cand_ext.registered_domain == origin_ext.registered_domain:
+                return True
+
+        return False
 
 
 # === HTML NORMALIZER (FOR HASHING) ===

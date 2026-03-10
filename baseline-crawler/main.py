@@ -21,6 +21,7 @@ import os
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import socket
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class FlushingFileHandler(logging.FileHandler):
@@ -31,7 +32,7 @@ class FlushingFileHandler(logging.FileHandler):
 from report_generator import generate_report
 
 from crawler.engine import Frontier, CrawlerWorker, ExecutionPolicy
-from crawler.processor import LinkUtility, TrafficControl
+from crawler.processor import LinkUtility, TrafficControl, PageFetcher
 from crawler.storage.db import (
     check_db_health,
     fetch_enabled_sites,
@@ -42,6 +43,7 @@ from crawler.storage.db import (
 )
 from crawler.storage.mysql import fetch_site_info_by_baseline_id, site_has_baselines, get_defacement_rows_for_site
 from crawler.baseline_worker import BaselineWorker
+from crawler.js_engine import BrowserManager
 from crawler.core import (
     logger,
     MIN_WORKERS,
@@ -125,6 +127,32 @@ def resolve_seed_url(raw_url: str) -> str:
     return raw
 
 
+def test_waf_connectivity(ip: str, domain: str, timeout=5) -> bool:
+    """
+    Checks if the WAF IP is reachable on port 443.
+    This prevents the crawler from hanging on dead/zombie IPs.
+    """
+    if not ip:
+        return False
+    
+    # If WAF IP is a hostname, resolve it first
+    target_ip = ip
+    if any(c.isalpha() for c in ip):
+        try:
+            target_ip = socket.gethostbyname(ip)
+        except Exception as e:
+            logger.warning(f"[BYPASS] Could not resolve WAF hostname {ip}: {e}")
+            return False
+
+    try:
+        # Simple socket connection check (TCP Handshake)
+        with socket.create_connection((target_ip, 443), timeout=timeout):
+            return True
+    except Exception as e:
+        logger.warning(f"[BYPASS] Connectivity test failed for {domain} at {ip}: {e}")
+        return False
+
+
 # ============================================================
 # PER-SITE CRAWL LOGIC
 # ============================================================
@@ -155,6 +183,17 @@ def crawl_site(site, args, target_urls=None):
 
     job_logger = logger
 
+    # 🛡️ Pre-flight Connectivity Check (Prevent hangs on dead IPs)
+    waf_ip = site.get("waf_ip")
+    if waf_ip and CRAWL_MODE == "CRAWL":
+        domain = urlparse(resolved_seed).netloc or original_site_url
+        if not test_waf_connectivity(waf_ip, domain):
+            job_logger.warning(
+                f"[BYPASS] WAF IP {waf_ip} for {domain} is UNREACHABLE (Filtered/Dead). "
+                "Automatically falling back to Public DNS for stability."
+            )
+            site["waf_ip"] = None  # Disable bypass for this site run
+
     job_logger.info("=" * 60)
     job_logger.info(f"Starting job {job_id} ({CRAWL_MODE})")
     job_logger.info(f"Customer ID    : {custid}")
@@ -174,11 +213,31 @@ def crawl_site(site, args, target_urls=None):
         start_time = time.time()
 
         # ====================================================
+        # WAF IP BYPASS SETUP (applies to all modes)
+        # ====================================================
+        def _configure_waf_bypass(the_url):
+            """Configure both Playwright and HTTP fetching to use WAF IP."""
+            _waf_ip = site.get("waf_ip")
+            if _waf_ip:
+                from urllib.parse import urlparse as _p
+                _domain = _p(the_url if "://" in the_url else "https://" + the_url).netloc
+                job_logger.info(f"[BYPASS] WAF IP for site {siteid}: {_waf_ip} -> {_domain}")
+                BrowserManager.configure(_domain, _waf_ip)
+                PageFetcher.configure(_domain, _waf_ip)
+            else:
+                job_logger.info(f"[BYPASS] No WAF IP for site {siteid}. Standard routing.")
+                BrowserManager.configure(None, None)
+                PageFetcher.configure(None, None)
+
+        # ====================================================
         # BASELINE MODE (REFETCH FROM DB)
         # ====================================================
         if CRAWL_MODE == "BASELINE":
             job_logger.info(f"[MODE] BASELINE (offline refetch from DB for siteid={siteid})")
-            
+            # 🛡️ Strictly DNS-only for Baseline (commented out IP based bypass)
+            # _configure_waf_bypass(start_url)
+            # waf_ip = site.get("waf_ip")
+
             # Since BaselineWorker currently hardcodes max_workers=5
             worker_count = MAX_WORKERS
             logger.info(f"Worker-X : started (BASELINE) x{worker_count}")
@@ -194,6 +253,7 @@ def crawl_site(site, args, target_urls=None):
                 siteid=siteid,
                 seed_url=start_url,
                 target_urls=target_urls,
+                # waf_ip=waf_ip, # 🛡️ Strictly DNS-only for Baseline
                 heartbeat_callback=update_heartbeat
             ).run()
 
@@ -236,6 +296,7 @@ def crawl_site(site, args, target_urls=None):
         # ====================================================
         if CRAWL_MODE == "CRAWL":
             job_logger.info(f"[MODE] CRAWL (live discovery for siteid={siteid})")
+            _configure_waf_bypass(start_url)
 
             # 🛡️ Capture initial state for "NEW LINK FOUND" logic
             initial_has_data = has_site_crawl_data(siteid, start_url)
@@ -266,7 +327,8 @@ def crawl_site(site, args, target_urls=None):
                         crawl_mode="CRAWL", seed_url=start_url, 
                         original_site_url=original_site_url,
                         skip_report=site_skip_report, skip_lock=site_skip_lock,
-                        target_urls=target_urls
+                        target_urls=target_urls,
+                        waf_ip=site.get("waf_ip")
                     )
                     w.start()
                     workers.append(w)
@@ -298,7 +360,8 @@ def crawl_site(site, args, target_urls=None):
                                 crawl_mode="CRAWL", seed_url=start_url, 
                                 original_site_url=original_site_url,
                                 skip_report=site_skip_report, skip_lock=site_skip_lock,
-                                target_urls=target_urls
+                                target_urls=target_urls,
+                                waf_ip=site.get("waf_ip")
                             )
                             w.start()
                             workers.append(w)
@@ -428,6 +491,7 @@ def crawl_site(site, args, target_urls=None):
                   job_logger.warning(f"Site {siteid} has no existing baselines. Proceeding with crawl to identify and mark missing baselines.")
              
              job_logger.info(f"[MODE] COMPARE (live discovery + diff for siteid={siteid})")
+             _configure_waf_bypass(start_url)
 
              # 🛡️ Capture initial state for "NEW LINK FOUND" logic
              initial_has_data = has_site_crawl_data(siteid, start_url)
@@ -512,6 +576,7 @@ def crawl_site(site, args, target_urls=None):
                                  skip_report=site_skip_report, skip_lock=site_skip_lock,
                                  target_urls=target_urls,
                                  compare_results=GLOBAL_COMPARE_RESULTS, compare_lock=COMPARE_LOCK,
+                                 waf_ip=site.get("waf_ip")
                              )
                              w.start()
                              workers.append(w)
@@ -935,6 +1000,20 @@ def main():
                     logger.info(f"{sid:<10} | {u:<50} | {err}")
                 
                 logger.info("=" * 100 + "\n")
+
+                # 1. Group the failures by siteid
+                from collections import defaultdict
+                grouped_failures = defaultdict(list)
+                for f in BASELINE_FAILED_URLS:
+                    sid = f.get('siteid', 'UNKNOWN')
+                    grouped_failures[sid].append(f.get('url', ''))
+                # 2. Print each site's failures as a separate array/list
+                for sid, urls in grouped_failures.items():
+                    logger.info(f"SITE ID: {sid} | Total Failed: {len(urls)}")
+                    logger.info("-" * 40)
+                    for u in urls:
+                        logger.info(f"  - {u}")
+                    logger.info("-" * 100)
             
             logger.info(f"--- Session ended: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
             

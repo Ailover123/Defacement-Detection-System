@@ -196,7 +196,25 @@ def fetch_enabled_sites():
     conn = get_connection()
     try:
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT siteid, custid, url FROM sites")
+        # 🛡️ Retrieve site metadata PLUS WAF Bypass IP (if exists)
+        cur.execute("""
+            SELECT 
+                s.siteid, 
+                s.custid, 
+                s.url,
+                w.https_ip as waf_ip
+            FROM sites s
+            LEFT JOIN waf_policy_data w 
+                ON w.sitename = TRIM(LEADING 'www.' FROM 
+                    TRIM(LEADING 'https://' FROM 
+                        TRIM(LEADING 'http://' FROM 
+                            TRIM(LEADING 'https://www.' FROM 
+                                TRIM(LEADING 'http://www.' FROM LOWER(TRIM(s.url)))
+                            )
+                        )
+                    )
+                )
+        """)
         return cur.fetchall()
     finally:
         cur.close()
@@ -319,7 +337,7 @@ def insert_crawl_page(data):
             temp_url = "https://" + temp_url
         enforce_www = urlparse(temp_url).netloc.lower().startswith("www.")
 
-    canonical_url = LinkUtility.get_canonical_id(data["url"], base_url, enforce_www=enforce_www)
+    canonical_url = LinkUtility.get_canonical_id(data["url"], base_url, enforce_www=enforce_www, origin_url=base_url)
     if not canonical_url:
         return None
 
