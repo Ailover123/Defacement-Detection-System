@@ -1,110 +1,132 @@
 # Web Crawler System Specification: CRAWL Mode
 
-## 1. Requirements & Dependency Analysis
-| Library | Role in CRAWL Mode | Use Case & Technical Interaction |
-| :--- | :--- | :--- |
-| `requests` | **Network Core** | Handles synchronous HTTP fetching, connection pooling via `urllib3`, and manual redirect lifecycle management. Used for initial probes and non-JS content. |
-| `playwright`| **JS Rendering** | Manages headless Chromium instances. Used as an **escalation** when `JSIntelligence` detects missing content or requires browser-level DOM execution. |
-| `beautifulsoup4`| **DOM Parsing** | Extracts anchors (`<a>`), images (`<img>`), and scripts from raw HTML with `lxml` speed optimizations. |
-| `mysql-connector`| **Persistence** | Manages thread-safe inserts into `crawl_pages` and session updates in `crawl_jobs`. |
-| `tldextract` | **Domain Safety** | Ensures the crawler stays within the `registered_domain` boundary, even when navigating subdomains. |
+This document provides an ultra-granular technical breakdown of the `CRAWL` mode. It is designed as a definitive reference for developers to understand every layer of the system, from low-level networking and database safeguards to high-level orchestration.
 
 ---
 
-## 2. Networking & WAF Bypass Routing
+## 1. Requirements & Dependency Analysis
+The crawler's reliability stems from its specialized use of external libraries.
 
-### 2.1 HTTPS-Only Enforcement
-The system forces SSL for all connections in `CRAWL` mode.
-- **Location**: `LinkUtility.normalize_url_for_fetch` and `PageFetcher.fetch`.
-- **Logic**: Any `http://` URL is manually upgraded to `https://` before the request is dispatched.
-- **Redirects**: If a server sends a 301/302 back to HTTP, `PageFetcher` catches the `Location` header and re-upgrades it to HTTPS.
+| Library | Role in CRAWL Mode | Technical Interaction & Scope |
+| :--- | :--- | :--- |
+| `requests` | **Network Core** | Executes synchronous HTTPS fetches. Configured with `allow_redirects=False` for manual hop tracking and `verify=False` for WAF IP SNI compatibility. |
+| `playwright`| **Rendering Escalation** | Spawns headless Chromium. Used when `JSIntelligence` identifies SPAs (Single Page Apps) or when a standard HTTPS probe fails due to routing artifacts (e.g., 403 on hostname WAF IPs). |
+| `beautifulsoup4`| **DOM Extraction** | Parses HTML using the `lxml` engine. Specifically targets `<a>`, `<img>`, `<link>`, and `<script>` tags for both discovery and asset auditing. |
+| `mysql-connector`| **Data Persistence** | Implements the `MySQLConnectionPool`. Every worker thread acquires and releases connections via the `DB_SEMAPHORE` to prevent pool exhaustion. |
+| `tldextract` | **Boundary Enforcement**| Extract's the `registered_domain` (e.g., `google.com`) from arbitrary URLs. This is the **primary anchor** for all `ExecutionPolicy` domain-locking logic. |
 
-### 2.2 WAF Bypass via Netloc Substitution
-When a `waf_ip` is present (from `waf_policy_data`), the crawler bypasses public DNS.
-- **Mechanism**: The URL's `netloc` is replaced with the `waf_ip`, while the original domain is preserved in the `Host` header.
-- **Code Snippet (`processor.py`)**:
+---
+
+## 2. Phase-by-Phase I/O Flow Mapping
+The internal data flow between modules is standardized to ensure thread-safety and log consistency.
+
+| Phase | Module:Function | Input Data | Output Data | Semantic Logic |
+| :--- | :--- | :--- | :--- | :--- |
+| **0. Resolution** | `main.py:resolve_seed_url` | `raw_url` | `resolved_url` | Validates domain availability via variation probing. |
+| **1. Enqueue** | `engine.py:Frontier.enqueue` | `url`, `origin`, `depth` | `status_str` | Normalizes URL via `LinkUtility`; checks for duplicates in `visited` set. |
+| **2. Dequeue** | `engine.py:Frontier.dequeue` | `None` | `(item, found)` | Thread-safe `Queue.get()` for worker consumption. |
+| **3. Routing** | `processor.py:PageFetcher.fetch` | `url`, `siteid`, `waf_ip` | `result_dict` | Applies `Host` header overrides if WAF IP is active. |
+| **4. Rendering** | `js_engine.py:BrowserManager.render` | `url`, `waf_ip` | `(html, final_url)` | Executes `--host-rules` mapping for browser-level WAF bypass. |
+| **5. Saving** | `mysql.py:insert_crawl_page` | `page_metadata` | `action_info` | Syncs `status_code` and `canonical_id` to `crawl_pages` table. |
+| **6. Extraction** | `processor.py:LinkExtractor.extract` | `html`, `base_url` | `(urls, assets)` | Filters links via `ExecutionPolicy` (Tags/Assets/Query-Rules). |
+
+---
+
+## 3. Networking & WAF Bypass Reliability
+
+### 3.1 HTTPS-Only Enforcement
+To prevent "SSL Strip" vulnerabilities and ensure compatibility with modern WAFs, the crawler enforces **Strict HTTPS**.
+- **Logic**: In `LinkUtility.normalize_url_for_fetch`, if a URL scheme is missing or is `http://`, it is hard-rewritten to `https://`.
+- **Manual Redirect Upgrade**:
   ```python
-  if waf_ip and primary_host:
-      ip_url = urlunparse(parsed._replace(netloc=waf_ip))
-      headers["Host"] = parsed.netloc # Preserves SNI/Host context
-      response = requests.get(ip_url, headers=headers, verify=False)
+  # PageFetcher.fetch logic
+  if response.status_code in (301, 302):
+      next_url = urljoin(current_url, response.headers.get("Location"))
+      if next_url.startswith("http://"):
+          next_url = "https://" + next_url[7:] # 🛡️ Hard-force SSL
   ```
 
----
-
-## 3. Error, Redirect & Fallback Handling
-
-### 3.1 Redirect Lifecycle (301, 302, 307, 308)
-The crawler **manually** handles redirects (`allow_redirects=False`) to ensure WAF IP routing is maintained across the entire chain.
-- **Log**: `[FETCH] Redirect {status_code}: {current_url} -> {next_url}`
-- **Fallback**: If WAF IP fails during a redirect, it reverts to standard public IP routing for that domain.
-
-### 3.2 Hard Errors (404, 500, Timeout)
-- **404/5xx**: Logged as failures; `status_code` is persisted to `crawl_pages` but link extraction is skipped.
-- **Timeout**: `PageFetcher.TIMEOUT` (15s) triggers a fallback to `BrowserManager` (JS rendering) if a standard request hangs.
-- **Soft 404**: `JSIntelligence.is_404_content` checks the HTML body for "Page Not Found" strings even if the status code is 200.
-
-### 3.3 Rate Limiting (429/503)
-- **Detection**: Caught in `CrawlerWorker.run` and `TrafficControl.set_pause`.
-- **Response**: Triggers a domain-wide pause and scales down worker threads per domain to `MIN_WORKERS`.
-- **Log**: `[THROTTLE] Site {id} hit 429/503. Setting DOMAIN-WIDE PAUSE for {seconds}s.`
+### 3.2 WAF IP Routing (Host-Header Override)
+This is the core bypass mechanism for sites hidden behind specialized firewall IPs (Cloudflare/Sucuri).
+- **Requests (HTTP Level)**: Overrides the `netloc` with the IP while keeping the domain in the `Host` header.
+- **Playwright (Browser Level)**: Uses `--host-rules` to map the target domain to the WAF IP at the socket level.
 
 ---
 
-## 4. The Crawl Cycle: Annotated Flowchart
+## 4. The Fallback Hierarchy (Three-Tier Reliability)
+
+### 4.1 Tier 1: Database Fallback (Starvation Protection)
+The system uses a `BoundedSemaphore` to guard the connection pool.
+- **Problem**: In parallel mode, 50+ workers might request connections simultaneously, causing a total pool freeze.
+- **Fallback Snippet**:
+```python
+# mysql.py:get_connection
+acquired = DB_SEMAPHORE.acquire(timeout=10)
+if not acquired:
+    # Logic: Fallback from hanging to Graceful Failure
+    logger.error("[DB] Semaphore timeout — Possible deadlock detected.")
+    raise RuntimeError("DB_STARVATION_SHUTDOWN")
+```
+
+### 4.2 Tier 2: Code & Network Fallbacks (The Fetching Stack)
+The `PageFetcher.fetch_rendered` pipeline is a recursive fallback loop:
+1.  **Fast Probe**: Attempt via `requests` (Standard DNS).
+2.  **WAF Probe**: If `waf_ip` exists, attempt via `requests` (Bypass Routing).
+3.  **JS Escalation**: If WAF Probe fails or the page is "empty" (SPA detection), escalate to **Playwright**.
+4.  **HTTP Salvage**: If Playwright fails due to `net::ERR_FAILED`, the system performs one last standard `requests.get` as a "fail-safe" to capture any possible response.
+
+### 4.3 Tier 3: System Lifecycle Fallbacks
+The overall stability is managed by a **Watchdog** and **TrafficControl**.
+- **Watchdog Fallback**: If a worker hangs on a socket for >15 minutes without marking activity, the `watchdog_thread` execute `os._exit(1)` to force a system restart.
+- **Traffic Fallback**: If a site returns `429 Too Many Requests`, `TrafficControl` triggers a domain-wide 5s pause and scale-down of workers.
+
+---
+
+## 5. Annotated Execution Flow (Flowchart & Snippets)
 
 ```mermaid
 graph TD
-    subgraph "Entry (main.py)"
-        A[1. argparse/main] --> B[2. resolve_seed_url]
-    end
-
-    subgraph "Orchestration (main.py)"
-        B --> C[3. insert_crawl_job]
-        C --> D[4. Frontier Init]
-        D --> E[5. Spawn Workers]
-    end
-
-    subgraph "Discovery Loop (crawler/engine.py)"
-        E --> F[6. Frontier.dequeue]
-        F --> G[7. PageFetcher.fetch_rendered]
-        G --> H[8. insert_crawl_page]
-        H --> I[9. LinkExtractor.extract]
-        I --> J[10. Frontier.enqueue]
-        J --> F
-    end
+    A[Seed Discovery] --> B{Policy Check}
+    B -- Skip --> C[Log & Discard]
+    B -- Allow --> D[Frontier Queue]
+    D --> E[Worker Thread]
+    E --> F[HTTPS Fetch + WAF Bypass]
+    F --> G{JS Needed?}
+    G -- Yes --> H[Playwright Render]
+    H --> I[DB Persistence]
+    G -- No --> I
+    I --> J[Link Extraction]
+    J --> D
 ```
 
-### Flowchart Block Mapping
-| Block | File | Function/Class | Log Prefix | Logic / Snippet |
-| :--- | :--- | :--- | :--- | :--- |
-| **2** | `main.py` | `resolve_seed_url` | `[INFO]` | Probes variation variations via `requests`. |
-| **4** | `engine.py`| `Frontier` | `[INFO]` | Manages the `queue` and `visited` sets. |
-| **7** | `processor.py`| `PageFetcher` | `[FETCH]` | Executes HTTP request -> Detects JS needs -> Escalates to Playwright. |
-| **8** | `mysql.py` | `insert_crawl_page`| `[DB]`| Upserts into `crawl_pages` using canonical IDs. |
-| **9** | `processor.py`| `LinkExtractor` | `[INFO]` | Parses HTML -> Filters by `ExecutionPolicy`. |
+### Logical Block Mapping
+| Block | Component | Logic within Snippet | Log Evidence |
+| :--- | :--- | :--- | :--- |
+| **F: Fetch** | `PageFetcher` | Uses `requests.Session` for pooling. | `[FETCH] HTTP 200 via 1.2.3.4` |
+| **G: JS Detect** | `JSIntelligence` | Scans for `<meta http-equiv="refresh">`. | `[FETCH] JS rendering required` |
+| **I: DB** | `insert_crawl_page` | `ON DUPLICATE KEY UPDATE` logic. | `[DB] Inserted / Existed` |
+| **J: Link** | `LinkExtractor` | Regex extraction of static assets. | `[INFO] Enqueued 10 URLs` |
 
 ---
 
-## 5. main.py Execution & Reporting
-- **Watchdog Thread**: Monitors `LAST_ACTIVITY_TIME`. Kills process if idle for >900s.
-- **Batching**: Parallel mode processes sites in batches of 20 via `ThreadPoolExecutor`.
+## 6. main.py Narrative & Reporting
+`main.py` acts as the global scheduler. It handles the watchdog lifecycle and generates the final session report.
 
-### Crawler Summary Table (Actual Output)
-Logged at the end of every domain crawl via `SUMMARY_LOCK`.
+### Final Summary Table Mapping
+The `SUMMARY_LOCK` ensures that the final metrics are printed atomically per domain.
 
-| Metric | Details |
+| Table Column | Actual Technical Source |
 | :--- | :--- |
-| **Total URLs Attempted** | Sum of all discovery attempts (Success + Skip + Fail). |
-| **Newly Saved** | New pages successfully added to `crawl_pages` DB. |
-| **Already in DB** | Pages identified as existing via Canonical ID check. |
-| **Redirects** | Total hops identified during `PageFetcher` cycle. |
-| **Failures** | Counts of 404, 5xx, or network timeout/DNS errors. |
-| **429/503 Throttles** | Count of rate-limit events encountered. |
+| **Total URLs Attempted** | `total_saved + total_failed + total_skipped` |
+| **Newly Saved** | DB `INSERT` success count from `insert_crawl_page`. |
+| **Already in DB** | `Action: Existed` results from `crawl_pages` check. |
+| **Redirects** | Hop-count from the internal `redirect_count` worker property. |
+| **429/503 Throttles** | Count of `TrafficControl` activations per session. |
 
 ---
 
-## 6. Logic Breakdown of Fallbacks
-1. **WAF Fallback**: If `requests` via WAF IP returns a 403 or 401, the system re-attempts via standard public routing.
-2. **JS Fallback**: If a request result has no links but `JSIntelligence` sees a `#root` or `<app-root>` tag, it restarts the fetch in Playwright.
-3. **Database Fallback**: If the pool is exhausted, the `DB_SEMAPHORE` blocks requesting threads for 10s before raising a starvation error.
+## 7. Developer's Guide to System edits
+- **Adding a Skip Rule**: Modify `ExecutionPolicy.PATH_SKIP_RULES`.
+- **Changing Scaling**: Edit `MIN_WORKERS`/`MAX_WORKERS` in `.env`.
+- **Modifying Persistence**: Logic sits in `mysql.py` under `insert_crawl_page`.
+- **WAF Policy Changes**: Update `PageFetcher` and `BrowserManager` configuration blocks in `main.py`.
