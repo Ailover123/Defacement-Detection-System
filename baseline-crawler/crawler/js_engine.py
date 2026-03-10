@@ -166,12 +166,6 @@ class BrowserManager:
                             ],
                         )
 
-                        context = browser.new_context(
-                            user_agent=USER_AGENT,
-                            viewport={"width": 1280, "height": 900},
-                            java_script_enabled=True,
-                        )
-
                         # Block heavy resources (keep JS)
                         def route_handler(route):
                             if route.request.resource_type in (
@@ -182,9 +176,26 @@ class BrowserManager:
                                 return route.abort()
                             return route.continue_()
 
-                        context.route("**/*", route_handler)
+                        def is_page_crash_error(err: Exception) -> bool:
+                            msg = str(err).lower()
+                            crash_markers = (
+                                "page crashed",
+                                "target page, context or browser has been closed",
+                                "browser has been closed",
+                                "connection closed",
+                            )
+                            return any(marker in msg for marker in crash_markers)
 
-                        page = context.new_page()
+                        def create_context_and_page():
+                            ctx = browser.new_context(
+                                user_agent=USER_AGENT,
+                                viewport={"width": 1280, "height": 900},
+                                java_script_enabled=True,
+                            )
+                            ctx.route("**/*", route_handler)
+                            return ctx, ctx.new_page()
+
+                        context, page = create_context_and_page()
 
                         logger.info(f"[JS-ENGINE] Worker-{self.wid} ready")
 
@@ -198,99 +209,144 @@ class BrowserManager:
                             try:
                                 status_code = 0
                                 html = ""
-                                nav_error = None
+                                done = False
+                                last_error = None
 
-                                # ====================================================
-                                # STAGE 1: DOMContentLoaded attempt
-                                # ====================================================
-                                try:
-                                    response = page.goto(
-                                        url,
-                                        wait_until="domcontentloaded",
-                                        timeout=15000,
-                                    )
-                                    if response:
-                                        status_code = response.status
-                                except Exception as e:
-                                    nav_error = e
-                                    response = None
-
-                                # ====================================================
-                                # STAGE 2: Commit fallback if DOM failed
-                                # ====================================================
-                                if not response:
+                                for attempt in range(2):
                                     try:
-                                        response = page.goto(
-                                            url,
-                                            wait_until="commit",
-                                            timeout=15000,
+                                        nav_error = None
+                                        response = None
+
+                                        # ====================================================
+                                        # STAGE 1: DOMContentLoaded attempt
+                                        # ====================================================
+                                        try:
+                                            response = page.goto(
+                                                url,
+                                                wait_until="domcontentloaded",
+                                                timeout=15000,
+                                            )
+                                            if response:
+                                                status_code = response.status
+                                        except Exception as e:
+                                            nav_error = e
+
+                                        # ====================================================
+                                        # STAGE 2: Commit fallback if DOM failed
+                                        # ====================================================
+                                        if not response:
+                                            # Avoid navigating again on a crashed page.
+                                            if nav_error and is_page_crash_error(nav_error):
+                                                raise nav_error
+
+                                            try:
+                                                response = page.goto(
+                                                    url,
+                                                    wait_until="commit",
+                                                    timeout=15000,
+                                                )
+                                                if response:
+                                                    status_code = response.status
+                                            except Exception as e:
+                                                nav_error = e
+                                                logger.warning(
+                                                    f"[JS-ENGINE] Navigation fallback failed for {url}: {e}"
+                                                )
+
+                                        # If navigation never produced a response, treat it as a hard failure.
+                                        if not response:
+                                            raise RuntimeError(
+                                                f"Navigation failed for {url}: {nav_error or 'no response from browser'}"
+                                            )
+
+                                        # Browser error pages must not be processed as crawlable HTML.
+                                        final_url = page.url or ""
+                                        if final_url.lower().startswith("chrome-error://"):
+                                            raise RuntimeError(
+                                                f"Browser error page returned for {url}: {final_url}"
+                                            )
+
+                                        # ====================================================
+                                        # STAGE 3: Stabilization
+                                        # ====================================================
+                                        try:
+                                            page.wait_for_load_state("load", timeout=5000)
+                                        except:
+                                            pass
+
+                                        try:
+                                            page.wait_for_function(
+                                                "document.readyState === 'complete'",
+                                                timeout=5000
+                                            )
+                                        except:
+                                            pass
+
+                                        page.wait_for_timeout(500)
+
+                                        # ====================================================
+                                        # STAGE 4: Safe content extraction
+                                        # ====================================================
+                                        try:
+                                            html = page.content()
+                                        except:
+                                            page.wait_for_timeout(400)
+                                            html = page.content()
+
+                                        result_q.put(
+                                            RenderResult(
+                                                html,
+                                                final_url,
+                                                status_code,
+                                            )
                                         )
-                                        if response:
-                                            status_code = response.status
+
+                                        done = True
+
+                                        # Fast reset
+                                        try:
+                                            page.goto("about:blank", timeout=1500)
+                                        except:
+                                            pass
+
+                                        break
+
                                     except Exception as e:
-                                        nav_error = e
-                                        logger.warning(
-                                            f"[JS-ENGINE] Navigation fallback failed for {url}: {e}"
+                                        last_error = e
+
+                                        should_retry = (
+                                            attempt == 0 and
+                                            is_page_crash_error(e)
                                         )
 
-                                # If navigation never produced a response, treat it as a hard failure.
-                                if not response:
-                                    raise RuntimeError(
-                                        f"Navigation failed for {url}: {nav_error or 'no response from browser'}"
+                                        if should_retry:
+                                            logger.warning(
+                                                f"[JS-ENGINE] Worker-{self.wid} page crashed for {url}; rebuilding context and retrying once"
+                                            )
+                                            try:
+                                                page.close()
+                                            except:
+                                                pass
+                                            try:
+                                                context.close()
+                                            except:
+                                                pass
+                                            context, page = create_context_and_page()
+                                            continue
+
+                                        break
+
+                                if not done:
+                                    raise last_error or RuntimeError(
+                                        f"Navigation failed for {url}: unknown rendering error"
                                     )
-
-                                # Browser error pages must not be processed as crawlable HTML.
-                                final_url = page.url or ""
-                                if final_url.lower().startswith("chrome-error://"):
-                                    raise RuntimeError(
-                                        f"Browser error page returned for {url}: {final_url}"
-                                    )
-
-                                # ====================================================
-                                # STAGE 3: Stabilization
-                                # ====================================================
-                                try:
-                                    page.wait_for_load_state("load", timeout=5000)
-                                except:
-                                    pass
-
-                                try:
-                                    page.wait_for_function(
-                                        "document.readyState === 'complete'",
-                                        timeout=5000
-                                    )
-                                except:
-                                    pass
-
-                                page.wait_for_timeout(500)
-
-                                # ====================================================
-                                # STAGE 4: Safe content extraction
-                                # ====================================================
-                                try:
-                                    html = page.content()
-                                except:
-                                    page.wait_for_timeout(400)
-                                    html = page.content()
-
-                                result_q.put(
-                                    RenderResult(
-                                        html,
-                                        final_url,
-                                        status_code,
-                                    )
-                                )
-
-                                # Fast reset
-                                try:
-                                    page.goto("about:blank", timeout=1500)
-                                except:
-                                    pass
 
                             except Exception as e:
                                 logger.warning(
                                     f"[JS-ENGINE] Worker-{self.wid} page error: {e}"
                                 )
+
+                                reset_context = is_page_crash_error(e)
 
                                 try:
                                     page.close()
@@ -298,9 +354,16 @@ class BrowserManager:
                                     pass
 
                                 try:
-                                    page = context.new_page()
+                                    if reset_context:
+                                        try:
+                                            context.close()
+                                        except:
+                                            pass
+                                        context, page = create_context_and_page()
+                                    else:
+                                        page = context.new_page()
                                 except:
-                                    raise
+                                    context, page = create_context_and_page()
 
                                 result_q.put(RenderResult(error=e))
 
