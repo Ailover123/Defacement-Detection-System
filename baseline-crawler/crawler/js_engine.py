@@ -13,8 +13,9 @@ import queue
 import time
 import hashlib
 import re
+import atexit
 from playwright.sync_api import sync_playwright
-from crawler.core import USER_AGENT, logger
+from crawler.core import USER_AGENT, logger, JS_GOTO_TIMEOUT, JS_WAIT_TIMEOUT, JS_STABILITY_TIME
 
 
 # ============================================================
@@ -136,6 +137,7 @@ class BrowserManager:
     _rr_index = 0
     _current_domain = None
     _current_host_rule = None # e.g. "MAP domain.com 1.2.3.4"
+    _shutdown_registered = False
 
     # --------------------------------------------------------
     # Worker Thread
@@ -201,6 +203,9 @@ class BrowserManager:
                             )
                             return any(marker in msg for marker in crash_markers)
 
+                        def is_timeout_error(err: Exception) -> bool:
+                            return "timeout" in str(err).lower()
+
                         def create_context_and_page():
                             ctx = browser.new_context(
                                 user_agent=USER_AGENT,
@@ -211,6 +216,25 @@ class BrowserManager:
                             ctx.route("**/*", route_handler)
                             return ctx, ctx.new_page()
 
+                        def dispose_page_and_context():
+                            try:
+                                page.unroute("**")
+                            except:
+                                pass
+                            try:
+                                context.unroute("**")
+                            except:
+                                pass
+                            try:
+                                if not page.is_closed():
+                                    page.close()
+                            except:
+                                pass
+                            try:
+                                context.close()
+                            except:
+                                pass
+
                         context, page = create_context_and_page()
 
                         logger.info(f"[JS-ENGINE] Worker-{self.wid} ready")
@@ -218,6 +242,7 @@ class BrowserManager:
                         while True:
                             item = self.task_queue.get()
                             if item is None:
+                                dispose_page_and_context()
                                 return
 
                             url, result_q, waf_ip, primary_host = item
@@ -232,6 +257,13 @@ class BrowserManager:
                                     try:
                                         nav_error = None
                                         response = None
+                                        domcontentloaded_timeout_ms = min(
+                                            max(int(JS_GOTO_TIMEOUT * 1000 * 0.6), 8000),
+                                            15000,
+                                        )
+                                        commit_timeout_ms = max(int(JS_GOTO_TIMEOUT * 1000), 25000)
+                                        stabilization_timeout_ms = max(int(JS_WAIT_TIMEOUT * 1000), 3000)
+                                        settle_delay_ms = max(int(JS_STABILITY_TIME * 1000), 500)
 
                                         # ====================================================
                                         # Routing / Fast Navigation Setup
@@ -249,15 +281,20 @@ class BrowserManager:
                                             response = page.goto(
                                                 url,
                                                 wait_until="domcontentloaded",
-                                                timeout=15000,
+                                                timeout=domcontentloaded_timeout_ms,
                                             )
                                             if response:
                                                 status_code = response.status
                                         except Exception as e:
                                             nav_error = e
-                                            logger.warning(
-                                                f"[JS-ENGINE] DOMContentLoaded attempt failed for {url}: {e}"
-                                            )
+                                            if is_timeout_error(e):
+                                                logger.info(
+                                                    f"[JS-ENGINE] DOMContentLoaded timed out for {url}; trying commit fallback"
+                                                )
+                                            else:
+                                                logger.warning(
+                                                    f"[JS-ENGINE] DOMContentLoaded attempt failed for {url}: {e}"
+                                                )
 
                                         # ====================================================
                                         # STAGE 2: Commit fallback if DOM failed or blocked by WAF
@@ -292,7 +329,7 @@ class BrowserManager:
                                                 response = page.goto(
                                                     url,
                                                     wait_until="commit",
-                                                    timeout=15000 if not fallback_reason else 30000,
+                                                    timeout=commit_timeout_ms if not fallback_reason else max(commit_timeout_ms, 30000),
                                                 )
                                                 if response:
                                                     status_code = response.status
@@ -318,19 +355,19 @@ class BrowserManager:
                                         # STAGE 3: Stabilization
                                         # ====================================================
                                         try:
-                                            page.wait_for_load_state("load", timeout=5000)
+                                            page.wait_for_load_state("load", timeout=stabilization_timeout_ms)
                                         except:
                                             pass
 
                                         try:
                                             page.wait_for_function(
                                                 "document.readyState === 'complete'",
-                                                timeout=5000
+                                                timeout=stabilization_timeout_ms
                                             )
                                         except:
                                             pass
 
-                                        page.wait_for_timeout(500)
+                                        page.wait_for_timeout(settle_delay_ms)
 
                                         # ====================================================
                                         # STAGE 4: Safe content extraction
@@ -371,14 +408,7 @@ class BrowserManager:
                                             logger.warning(
                                                 f"[JS-ENGINE] Worker-{self.wid} page crashed for {url}; rebuilding context and retrying once"
                                             )
-                                            try:
-                                                page.close()
-                                            except:
-                                                pass
-                                            try:
-                                                context.close()
-                                            except:
-                                                pass
+                                            dispose_page_and_context()
                                             context, page = create_context_and_page()
                                             continue
 
@@ -394,24 +424,10 @@ class BrowserManager:
                                     f"[JS-ENGINE] Worker-{self.wid} page error: {e}"
                                 )
 
-                                reset_context = is_page_crash_error(e)
-
-                                try:
-                                    page.close()
-                                except:
-                                    pass
-
-                                try:
-                                    if reset_context:
-                                        try:
-                                            context.close()
-                                        except:
-                                            pass
-                                        context, page = create_context_and_page()
-                                    else:
-                                        page = context.new_page()
-                                except:
-                                    context, page = create_context_and_page()
+                                # Always rebuild the context after failures to clear pending
+                                # route/navigation futures and avoid noisy TargetClosed warnings.
+                                dispose_page_and_context()
+                                context, page = create_context_and_page()
 
                                 result_q.put(RenderResult(error=e))
 
@@ -435,14 +451,21 @@ class BrowserManager:
         Configure site-specific host rules for the browser.
         If the domain/IP mapping changes, existing workers will be restarted.
         """
-        if not domain or not waf_ip:
-            new_rule = None
-        else:
-            # Map BOTH root and www to the same IP for maximum reliability
-            root_domain = domain.lower().replace("www.", "")
-            new_rule = f"MAP {root_domain} {waf_ip}, MAP www.{root_domain} {waf_ip}"
-        
         with cls._init_lock:
+            # 🛡️ RESTRICT TO CRAWL MODE ONLY as requested by USER
+            import os
+            crawl_mode = os.getenv("CRAWL_MODE", "CRAWL").upper()
+            if crawl_mode != "CRAWL":
+                new_rule = None
+                if cls._current_domain or cls._current_host_rule:
+                    logger.info(f"[JS-ENGINE] Host routing disabled for mode {crawl_mode}.")
+            elif not domain or not waf_ip:
+                new_rule = None
+            else:
+                # Map BOTH root and ALL subdomains to the same IP for maximum reliability
+                root_domain = domain.lower().replace("www.", "")
+                new_rule = f"MAP {root_domain} {waf_ip}, MAP *.{root_domain} {waf_ip}"
+            
             if cls._current_domain == domain and cls._current_host_rule == new_rule:
                 return # No change
             
@@ -485,6 +508,10 @@ class BrowserManager:
             ):
                 return
 
+            if not cls._shutdown_registered:
+                atexit.register(cls.shutdown)
+                cls._shutdown_registered = True
+
             cls._workers = []
             cls._queues = []
             cls._rr_index = 0
@@ -494,6 +521,33 @@ class BrowserManager:
                 worker = cls._Worker(i, q)
                 cls._queues.append(q)
                 cls._workers.append(worker)
+
+    @classmethod
+    def shutdown(cls):
+        with cls._init_lock:
+            if not cls._workers:
+                return
+
+            try:
+                logger.info("[JS-ENGINE] Shutting down render workers...")
+            except:
+                pass
+
+            for q in cls._queues:
+                try:
+                    q.put(None)
+                except:
+                    pass
+
+            for w in cls._workers:
+                try:
+                    w.join(timeout=5)
+                except:
+                    pass
+
+            cls._workers = []
+            cls._queues = []
+            cls._rr_index = 0
 
     # --------------------------------------------------------
     # Public API
