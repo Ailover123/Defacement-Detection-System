@@ -309,6 +309,10 @@ class PageFetcher:
         http_result = PageFetcher.fetch(url, siteid)
 
         html = http_result.get("html", "")
+        http_html = html
+        http_final_url = http_result.get("final_url", url)
+        http_status_code = http_result.get("status_code", 0)
+        http_content_type = http_result.get("content_type", "")
 
         # ------------------------------------------------------
         # If HTTP failed → fallback to JS rendering
@@ -404,6 +408,20 @@ class PageFetcher:
             except Exception as e:
 
                 logger.warning(f"[FETCH] JS render failed for {url}: {e}")
+
+                # Keep crawl progress when HTTP already returned usable HTML.
+                if http_html:
+                    logger.warning(
+                        f"[FETCH] Falling back to HTTP HTML after JS failure: {url}"
+                    )
+                    return {
+                        "success": True,
+                        "html": http_html,
+                        "status_code": http_status_code,
+                        "final_url": http_final_url,
+                        "content_type": http_content_type,
+                        "fetch_time_ms": int((time.time() - start) * 1000),
+                    }
 
                 return {
                     "success": False,
