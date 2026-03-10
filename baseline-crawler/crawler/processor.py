@@ -228,6 +228,16 @@ class PageFetcher:
         When set, HTTP requests route to the IP directly with a Host header.
         Pass None to disable bypass.
         """
+        cls._current_waf_ip = None
+        cls._current_primary_host = None
+
+        # 🛡️ RESTRICT TO CRAWL MODE ONLY as requested by USER
+        import os
+        crawl_mode = os.getenv("CRAWL_MODE", "CRAWL").upper()
+        if crawl_mode != "CRAWL":
+            logger.info(f"[FETCH] HTTP bypass disabled for mode {crawl_mode}.")
+            return
+
         cls._current_waf_ip = waf_ip if waf_ip else None
         cls._current_primary_host = domain if domain else None
         if waf_ip:
@@ -280,7 +290,15 @@ class PageFetcher:
                 if waf_ip and primary_host:
                     url_host = parsed.netloc.lower().replace("www.", "")
                     target_host = primary_host.lower().replace("www.", "")
-                    if url_host == target_host:
+
+                    # ✅ SUBDOMAIN SUPPORT: Allow subdomains (lmsapi.xxx.in) to use WAF IP 
+                    # if they belong to the same registered domain as the primary host.
+                    ext_url = tldextract.extract(current_url)
+                    ext_target = tldextract.extract(primary_host if "://" in primary_host else "https://" + primary_host)
+
+                    is_same_domain = (ext_url.registered_domain == ext_target.registered_domain)
+
+                    if url_host == target_host or is_same_domain:
                         # Replace host with WAF IP, keep domain in Host header
                         ip_url = urlunparse(parsed._replace(netloc=waf_ip))
                         fetch_url = ip_url
@@ -344,13 +362,21 @@ class PageFetcher:
             }
 
         except Exception as e:
-            logger.warning(f"[FETCH] HTTP fetch failed for {url}: {e}")
+            err_msg = str(e).lower()
+            is_dns_error = any(m in err_msg for m in ("nameresolutionerror", "getaddrinfo failed", "gaierror"))
+            
+            if is_dns_error:
+                logger.warning(f"[FETCH] DNS resolution failed for {url}: {e}")
+            else:
+                logger.warning(f"[FETCH] HTTP fetch failed for {url}: {e}")
+
             return {
                 "success": False,
                 "status_code": 0,
                 "html": "",
                 "final_url": current_url,
                 "error": str(e),
+                "is_dns_error": is_dns_error,
             }
 
     # ------------------------------------------------------------
@@ -394,6 +420,86 @@ class PageFetcher:
             except Exception as e:
                 logger.warning(f"[FETCH] Failed to save tmp HTML snapshot for {url}: {e}")
 
+        def _is_connection_level_js_error(err: Exception) -> bool:
+            msg = str(err).lower()
+            markers = (
+                "err_connection_timed_out",
+                "err_timed_out",
+                "err_name_not_resolved",
+                "err_connection_refused",
+                "err_connection_reset",
+                "err_address_unreachable",
+                "navigation failed",
+                "timeout",
+            )
+            return any(marker in msg for marker in markers)
+
+        def _toggle_www_variant(target_url: str):
+            try:
+                parsed = urlparse(target_url)
+                if not parsed.netloc:
+                    return None
+
+                host_part, sep, port_part = parsed.netloc.partition(":")
+                host_lower = host_part.lower()
+
+                if host_lower.startswith("www."):
+                    alt_host = host_lower[4:]
+                else:
+                    ext = tldextract.extract(host_lower)
+                    if ext.subdomain:
+                        return None
+                    alt_host = f"www.{host_lower}"
+
+                if not alt_host or alt_host == host_lower:
+                    return None
+
+                alt_netloc = f"{alt_host}:{port_part}" if sep and port_part else alt_host
+                return urlunparse(parsed._replace(netloc=alt_netloc))
+            except Exception:
+                return None
+
+        def _render_js_with_host_fallback(render_url: str):
+            def _render_once(target_url: str, waf_ip, primary_host):
+                rendered_html, rendered_final_url, rendered_status = BrowserManager.render_sync(
+                    target_url,
+                    waf_ip=waf_ip,
+                    primary_host=primary_host,
+                )
+                if rendered_html and "<body" not in rendered_html.lower():
+                    logger.warning(f"[FETCH] Truncated JS render (no <body>), retrying: {target_url}")
+                    time.sleep(2)
+                    rendered_html, rendered_final_url, rendered_status = BrowserManager.render_sync(
+                        target_url,
+                        waf_ip=waf_ip,
+                        primary_host=primary_host,
+                    )
+                return rendered_html, rendered_final_url, rendered_status
+
+            _wip = PageFetcher._current_waf_ip
+            _ph = PageFetcher._current_primary_host
+
+            try:
+                return _render_once(render_url, _wip, _ph)
+            except Exception as first_error:
+                # Host-variant retry only for direct routing and clear connection-level failures.
+                if _wip or not _is_connection_level_js_error(first_error):
+                    raise
+
+                alt_url = _toggle_www_variant(render_url)
+                if not alt_url or alt_url == render_url:
+                    raise
+
+                logger.warning(
+                    f"[FETCH] JS navigation failed for {render_url}. Retrying host variant: {alt_url}"
+                )
+                try:
+                    return _render_once(alt_url, _wip, _ph)
+                except Exception as second_error:
+                    raise RuntimeError(
+                        f"{first_error} | host-variant retry failed for {alt_url}: {second_error}"
+                    ) from second_error
+
         http_result = PageFetcher.fetch(url, siteid)
 
         html = http_result.get("html", "")
@@ -434,17 +540,22 @@ class PageFetcher:
                 )
 
             # 🔄 Connection-level failure (timeout, SSL, DNS) → fallback to JS render
+            if http_result.get("is_dns_error"):
+                logger.warning(f"[FETCH] DNS resolution failed → skipping JS render (pointless): {url}")
+                return {
+                    "success": False,
+                    "error": f"DNS resolution failed: {http_result.get('error')}",
+                    "html": "",
+                    "status_code": 0,
+                    "final_url": url,
+                    "content_type": "",
+                    "fetch_time_ms": int((time.time() - start) * 1000),
+                }
+
             logger.info(f"[FETCH] HTTP connection failed → using JS render: {url}")
 
             try:
-                _wip = PageFetcher._current_waf_ip
-                _ph = PageFetcher._current_primary_host
-                html, final_url, status = BrowserManager.render_sync(url, waf_ip=_wip, primary_host=_ph)
-                # Retry once if truncated (no <body>)
-                if html and "<body" not in html.lower():
-                    logger.warning(f"[FETCH] Truncated JS render (no <body>), retrying: {url}")
-                    time.sleep(2)
-                    html, final_url, status = BrowserManager.render_sync(url)
+                html, final_url, status = _render_js_with_host_fallback(url)
 
                 if PageFetcher._is_invalid_render_result(final_url, html):
                     _save_tmp_snapshot("invalid_js_after_http_fail", html, final_url)
@@ -492,15 +603,7 @@ class PageFetcher:
             logger.info(f"[FETCH] JS rendering required: {url}")
 
             try:
-                _wip = PageFetcher._current_waf_ip
-                _ph = PageFetcher._current_primary_host
-                html, final_url, status = BrowserManager.render_sync(url, waf_ip=_wip, primary_host=_ph)
-
-                # Retry once if truncated (no <body>)
-                if html and "<body" not in html.lower():
-                    logger.warning(f"[FETCH] Truncated JS render (no <body>), retrying: {url}")
-                    time.sleep(2)
-                    html, final_url, status = BrowserManager.render_sync(url, waf_ip=_wip, primary_host=_ph)
+                html, final_url, status = _render_js_with_host_fallback(url)
 
                 if PageFetcher._is_invalid_render_result(final_url, html):
                     _save_tmp_snapshot("invalid_js_render", html, final_url)
