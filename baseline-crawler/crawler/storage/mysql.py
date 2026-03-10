@@ -337,7 +337,7 @@ def insert_crawl_page(data):
             temp_url = "https://" + temp_url
         enforce_www = urlparse(temp_url).netloc.lower().startswith("www.")
 
-    canonical_url = LinkUtility.get_canonical_id(data["url"], base_url, enforce_www=enforce_www)
+    canonical_url = LinkUtility.get_canonical_id(data["url"], base_url, enforce_www=enforce_www, origin_url=base_url)
     if not canonical_url:
         return None
 

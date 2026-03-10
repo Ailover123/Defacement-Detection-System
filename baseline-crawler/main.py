@@ -21,6 +21,7 @@ import os
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import socket
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class FlushingFileHandler(logging.FileHandler):
@@ -126,6 +127,32 @@ def resolve_seed_url(raw_url: str) -> str:
     return raw
 
 
+def test_waf_connectivity(ip: str, domain: str, timeout=5) -> bool:
+    """
+    Checks if the WAF IP is reachable on port 443.
+    This prevents the crawler from hanging on dead/zombie IPs.
+    """
+    if not ip:
+        return False
+    
+    # If WAF IP is a hostname, resolve it first
+    target_ip = ip
+    if any(c.isalpha() for c in ip):
+        try:
+            target_ip = socket.gethostbyname(ip)
+        except Exception as e:
+            logger.warning(f"[BYPASS] Could not resolve WAF hostname {ip}: {e}")
+            return False
+
+    try:
+        # Simple socket connection check (TCP Handshake)
+        with socket.create_connection((target_ip, 443), timeout=timeout):
+            return True
+    except Exception as e:
+        logger.warning(f"[BYPASS] Connectivity test failed for {domain} at {ip}: {e}")
+        return False
+
+
 # ============================================================
 # PER-SITE CRAWL LOGIC
 # ============================================================
@@ -155,6 +182,17 @@ def crawl_site(site, args, target_urls=None):
     site_skip_report = defaultdict(lambda: {"count": 0, "urls": []})
 
     job_logger = logger
+
+    # 🛡️ Pre-flight Connectivity Check (Prevent hangs on dead IPs)
+    waf_ip = site.get("waf_ip")
+    if waf_ip and CRAWL_MODE == "CRAWL":
+        domain = urlparse(resolved_seed).netloc or original_site_url
+        if not test_waf_connectivity(waf_ip, domain):
+            job_logger.warning(
+                f"[BYPASS] WAF IP {waf_ip} for {domain} is UNREACHABLE (Filtered/Dead). "
+                "Automatically falling back to Public DNS for stability."
+            )
+            site["waf_ip"] = None  # Disable bypass for this site run
 
     job_logger.info("=" * 60)
     job_logger.info(f"Starting job {job_id} ({CRAWL_MODE})")
@@ -196,8 +234,9 @@ def crawl_site(site, args, target_urls=None):
         # ====================================================
         if CRAWL_MODE == "BASELINE":
             job_logger.info(f"[MODE] BASELINE (offline refetch from DB for siteid={siteid})")
-            _configure_waf_bypass(start_url)
-            waf_ip = site.get("waf_ip")
+            # 🛡️ Strictly DNS-only for Baseline (commented out IP based bypass)
+            # _configure_waf_bypass(start_url)
+            # waf_ip = site.get("waf_ip")
 
             # Since BaselineWorker currently hardcodes max_workers=5
             worker_count = MAX_WORKERS
@@ -214,7 +253,7 @@ def crawl_site(site, args, target_urls=None):
                 siteid=siteid,
                 seed_url=start_url,
                 target_urls=target_urls,
-                waf_ip=waf_ip,
+                # waf_ip=waf_ip, # 🛡️ Strictly DNS-only for Baseline
                 heartbeat_callback=update_heartbeat
             ).run()
 

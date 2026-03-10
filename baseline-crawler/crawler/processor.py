@@ -67,10 +67,8 @@ class LinkUtility:
         ))
 
     # -------------------------------
-    # STORAGE CANONICAL (DB)
-    # -------------------------------
     @staticmethod
-    def get_canonical_id(url: str, base: str | None = None, enforce_www: bool = False) -> str:
+    def get_canonical_id(url: str, base: str | None = None, enforce_www: bool = False, origin_url: str | None = None) -> str:
         if not url:
             return ""
 
@@ -80,13 +78,23 @@ class LinkUtility:
             url = "https://" + url
 
         if  base and "://" not in url:
-            url = urljoin(base,url)
+            url = urljoin(base, url)
 
         parsed = urlparse(url)
-
         netloc = parsed.netloc.lower()
 
-        # 🛡️ Force/Strip www based on enforce_www
+        # 🛡️ ORIGIN LOCK: If origin_url is provided (e.g. sattvagroup.in), 
+        # force the netloc to match it, even if we redirected to another domain (.com)
+        if origin_url:
+            if "://" not in origin_url:
+                origin_url = "https://" + origin_url
+            origin_parsed = urlparse(origin_url)
+            origin_netloc = origin_parsed.netloc.lower()
+            
+            # Mask the domain back to the origin
+            netloc = origin_netloc
+
+        # 🛡️ Force/Strip www based on enforce_www (applied after origin locking)
         if enforce_www:
             if not netloc.startswith("www."):
                 netloc = "www." + netloc
@@ -320,7 +328,7 @@ class PageFetcher:
                     return {
                         "success": is_success,
                         "status_code": response.status_code,
-                        "html": response.text or "" if is_success else "",
+                        "html": response.text or "",
                         "final_url": final_url,
                         "content_type": response.headers.get("Content-Type", ""),
                         "error": f"http error: {response.status_code}" if not is_success else None,
@@ -537,9 +545,12 @@ class LinkExtractor:
         return types
 
     @staticmethod
-    def extract_urls(html, base_url):
+    def extract_urls(html, base_url, origin_domain=None):
         soup = BeautifulSoup(html, 'html.parser')
-        base_domain = urlparse(base_url).netloc
+        
+        # Boundary: allow links on the CURRENT domain (where we are) 
+        # OR the original domain (what we want to keep).
+        current_domain = urlparse(base_url).netloc
         urls, assets = [], []
 
         def strip_fragment(u):
@@ -560,7 +571,7 @@ class LinkExtractor:
                 
                 first_part = temp_href.split('/')[0].lower()
                 if '.' in first_part and not first_part.startswith('.'):
-                    current_netloc = urlparse(base_url).netloc.lower().replace('www.', '')
+                    current_netloc = current_domain.lower().replace('www.', '')
                     clean_cand = first_part.replace('www.', '')
                     # ✅ Refined heuristic: Only match if it's the same domain or a clear subdomain relationship
                     if clean_cand == current_netloc or clean_cand.endswith("." + current_netloc) or current_netloc.endswith("." + clean_cand):
@@ -568,24 +579,24 @@ class LinkExtractor:
 
             url = strip_fragment(urljoin(base_url, href))
             if "®" in url: url = url.replace("®", "&reg")
-            if LinkExtractor._is_allowed_url(url, base_domain): urls.append(url)
+            if LinkExtractor._is_allowed_url(url, current_domain, origin_domain=origin_domain): urls.append(url)
 
         for img in soup.find_all('img', src=True):
             asset_url = strip_fragment(urljoin(base_url, img['src']))
-            if LinkExtractor._is_allowed_url(asset_url, base_domain): assets.append(asset_url)
+            if LinkExtractor._is_allowed_url(asset_url, current_domain, origin_domain=origin_domain): assets.append(asset_url)
 
         for link in soup.find_all('link', href=True):
             asset_url = strip_fragment(urljoin(base_url, link['href']))
-            if LinkExtractor._is_allowed_url(asset_url, base_domain): assets.append(asset_url)
+            if LinkExtractor._is_allowed_url(asset_url, current_domain, origin_domain=origin_domain): assets.append(asset_url)
 
         for script in soup.find_all('script', src=True):
             asset_url = strip_fragment(urljoin(base_url, script['src']))
-            if LinkExtractor._is_allowed_url(asset_url, base_domain): assets.append(asset_url)
+            if LinkExtractor._is_allowed_url(asset_url, current_domain, origin_domain=origin_domain): assets.append(asset_url)
 
         return urls, assets
 
     @staticmethod
-    def _is_allowed_url(url, base_domain):
+    def _is_allowed_url(url, base_domain, origin_domain=None):
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"): return False
         
@@ -598,8 +609,19 @@ class LinkExtractor:
             return False
 
         cand_ext = tldextract.extract(url)
-        base_ext = tldextract.extract(f"https://{base_domain}")
-        return cand_ext.registered_domain == base_ext.registered_domain
+        curr_ext = tldextract.extract(f"https://{base_domain}")
+
+        # ✅ Allow if matches the domain we are currently browsing (handling redirects)
+        if cand_ext.registered_domain == curr_ext.registered_domain:
+            return True
+        
+        # ✅ Allow if matches the original registered domain
+        if origin_domain:
+            origin_ext = tldextract.extract(f"https://{origin_domain}")
+            if cand_ext.registered_domain == origin_ext.registered_domain:
+                return True
+
+        return False
 
 
 # === HTML NORMALIZER (FOR HASHING) ===
