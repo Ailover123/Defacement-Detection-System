@@ -28,3 +28,15 @@ baselines/
 data_*.db
 export_*.json
 debug/
+
+# Documentation files (sensitive/internal)
+*.docx
+*.doc
+
+# Generated reports
+reports/
+
+# Sensitive credentials
+*.pem
+*.key
+*.cert
